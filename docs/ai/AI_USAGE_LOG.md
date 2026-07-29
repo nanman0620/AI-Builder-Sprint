@@ -6,6 +6,7 @@ Claude Code 또는 Codex가 분석·기획·설계·구현·테스트·검증·�
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-07-29 | Codex / GPT-5.6 Sol | 분석·설계·검증 | 최종 UI 캡처를 개발 기준에 연결 | 캡처 32장 의미 기반 분류, runtime asset 5개와 reference-only 24개 분리, README·UI_REFERENCE·역할 체크리스트·Issue/PR 규칙 갱신 | 61개 PNG 형식·크기 확인, 최종 화면 흐름 55쪽 텍스트·렌더 대조, Markdown 링크·파일 수·ZIP 검증 | 최종 화면 흐름을 동작 기준으로 유지. 상점·자동 경고 이동·오류 문구·이메일·캘린더 체크 충돌을 보정. 실제 앱 구현과 에뮬레이터 검수는 후속 Issue |
 | 2026-07-29 | Codex / GPT-5.6 Sol | 분석·설계·검증 | Git 협업 규칙 보정과 점수별 이음이 자산 연결 | branch·commit·PR·Issue 형식, develop 동기화 명령, 시점 의존 문구, 마감 경고 정렬, 일반 Issue 템플릿 수정. 점수별 runtime asset 4개와 `CHECK_IN_RESULT` 구간·배치·정적 자산 매핑 규칙 추가 | 원본 PDF와 추출 본문·페이지 수 비교, PDF 55·28·95쪽 파싱, PNG 66개 형식 확인, 신규 자산 4개 hash 비교, 금지 문구·필수 규칙 검사, 82개 파일·ZIP 무결성 검사 | 자산명의 0·30·60·100을 각 구간의 하한으로 사용. 30점은 표정 전용이며 60점 피드백·NOT_DONE 재계획은 유지. 실제 팀 포크 URL 반영, 기존 Expo 구조와의 병합, 에뮬레이터 육안 검수는 후속 작업 |
+| 2026-07-29 | Claude Code | 설계·구현·검증 | Expo 공통 기반 및 앱 라우팅 구축 | `2fd22f4` feat: Expo 공통 기반 및 앱 라우팅 구축 — Expo Router 인증·탭 Route 뼈대 구축, 하단 탭 4개 구성, `/` 진입 시 `/login` 이동, 공통 디자인 토큰과 공통 컴포넌트 추가, API·Supabase 클라이언트 기반 구성, Expo 기본 데모 파일 정리 | `npx tsc --noEmit` 통과, `npm run lint` 통과, 웹 `/` → `/login` 이동 확인, `/home` 및 하단 탭 전환 확인 | 실제 인증과 bootstrap 연동은 후속 Issue로 분리. 프론트엔드 담당자가 브라우저 동작을 최종 확인 |
 
 ## 작업 단계
 
