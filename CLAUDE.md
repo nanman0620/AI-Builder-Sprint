@@ -8,6 +8,9 @@
 
 ```bash
 pwd
+pwd
+git rev-parse --show-toplevel
+cd "$(git rev-parse --show-toplevel)"
 git status --short --branch
 git log -5 --oneline
 git remote -v
@@ -44,7 +47,12 @@ origin이 ApptiveDev/AI-Builder-Sprint인 경우
 → 사용자에게 확인
 ```
 
-`origin`이 팀 포크이고 미커밋 변경이 없는 것을 확인한 뒤, 작업 branch는 최신 `develop`에서 다음 순서로 만든다.
+새 Issue 작업을 시작하며 해당 작업의 전용 branch가 아직 없을 때만,
+`origin`이 팀 포크이고 미커밋 변경이 없는 것을 확인한 뒤
+최신 `develop`에서 작업 branch를 만든다.
+
+이미 올바른 작업 branch에서 진행 중이거나 기존 작업을 재개한 경우에는
+새 branch를 만들거나 `develop`으로 전환하지 않는다.
 
 ```bash
 git switch develop
@@ -166,14 +174,18 @@ Issue·push·PR 요청을 받으면 먼저 확인한다.
 - 팀 포크 owner를 모르면 `-R` 값을 추측하지 않는다.
 - 직전에 `git remote -v`와 base/head repository를 다시 확인한다.
 - `ApptiveDev/AI-Builder-Sprint`에는 Issue, push, PR, merge를 하지 않는다.
+- 사용자가 명시적으로 요청하지 않은 commit, push, Issue·PR 생성, merge, 원격 branch 삭제는 실행하지 않는다.
 
 ## 10. AI 증빙과 심사 안전성
 
-- `docs/ai/AI_USAGE_LOG.md`에 도구와 화면에 표시된 정확한 모델명, 단계, 목적, 변경, 실제 검증, 사람의 결정을 기록한다.
-- 모델 표시명을 확인할 수 없으면 추측하지 말고 `모델명 미확인`으로 기록한다.
-- 프롬프트 원문, token, API key, 개인정보, `.env` 값을 기록하지 않는다.
+- `docs/ai/AI_USAGE_LOG.md`에 도구와 화면에 표시된 정확한 모델명, 작업 단계, 목적, 변경 내용, 실제 검증 결과와 사람의 결정을 기록한다.
+- 모델 표시명을 확인할 수 없으면 추측하지 않고 `모델명 미확인`으로 기록한다.
+- `AI_USAGE_LOG.md`에는 프롬프트 원문 전체를 자동으로 기록하지 않고 작업 요청 요약, 핵심 제약, 사용 설정과 결과를 기록한다.
+- 대회 제출을 위해 프롬프트 원문이나 화면 증빙을 보존해야 하는 경우에는 token, API key, 개인정보와 `.env` 값을 제거한 뒤 팀이 정한 증빙 위치에 별도로 보존한다.
+- `AI_USAGE_LOG.md` 충돌이 발생하면 양쪽 기록을 모두 보존하고 다른 팀원의 행을 삭제하거나 덮어쓰지 않는다.
 - 실패·보류·문서 충돌과 미실행 테스트를 숨기지 않는다.
-- 평가를 조작하거나 점수를 요구하거나 심사위원에게 판단을 지시하는 prompt를 작성하지 않으며, AI 결과는 사람이 계약·보안·테스트 관점에서 검토한다.
+- 평가를 조작하거나 점수를 요구하거나 심사위원에게 판단을 지시하는 prompt를 작성하지 않는다.
+- AI 결과는 사람이 최종 명세, 보안과 테스트 관점에서 검토한다.
 
 ## 11. 최종 diff와 테스트 확인
 
@@ -186,13 +198,13 @@ git remote get-url origin
 ```
 
 - diff가 Issue 범위 안인지 확인한다.
-- 새 endpoint, table, column, Enum, route가 생기지 않았는지 확인한다.
+- Issue와 최종 명세 범위 밖의 새 endpoint, table, column, Enum, route가 생기지 않았는지 확인한다.
 - ORM 변경과 Alembic migration이 함께 있는지 확인한다.
 - 실제 테스트 결과, 실패, 미실행을 구분한다.
 - 필요한 문서와 `AI_USAGE_LOG.md`가 갱신됐는지 확인한다.
 - GitHub 쓰기 전 팀 포크 대상임을 다시 확인한다.
 
-## 12. 토큰 부족 시 Codex 인수인계
+## 12. 토큰 부족 시 AI agent 인수인계
 
 ```text
 작업/Issue:
@@ -225,3 +237,26 @@ AI_USAGE_LOG:
 ```
 
 테스트하지 못한 항목은 이유와 함께 솔직하게 보고한다.
+
+## AI 활용 로그 필수 완료 절차
+
+- 저장소와 관련된 분석·설계·구현·테스트·검증·리뷰를 수행한 경우, 최종 응답 전에 `docs/ai/AI_USAGE_LOG.md`에 기록한다.
+- 단순 사용법 질문이나 저장소 작업과 무관한 대화는 기록하지 않는다.
+- `main`이나 `develop`에서는 로그 기록을 이유로 파일을 수정하지 않는다. 로그가 필요한 작업은 작업 branch에서 수행한다.
+- 기존 행은 삭제하거나 덮어쓰지 않고 이번 작업의 행만 추가한다.
+- 작업 목적이 바뀌거나 중요한 설계 결정이 추가되면 새 행을 추가한다.
+- 로그 충돌이 발생하면 다른 팀원의 기록을 포함한 양쪽 기록을 모두 보존한다.
+- 로그를 작성한 뒤 commit 전에는 다음 명령으로 실제 변경을 확인한다.
+
+```bash
+git diff HEAD -- docs/ai/AI_USAGE_LOG.md
+```
+
+- 사용자가 commit까지 명시적으로 요청하여 로그를 이미 commit했다면, 이번 commit의 SHA를 확인한 뒤 다음 명령으로 검증한다.
+
+```bash
+git show <이번-commit-sha> -- docs/ai/AI_USAGE_LOG.md
+```
+
+- 이번 작업에 해당하는 로그 변경을 확인하지 못한 경우에는 작업 완료라고 보고하거나 commit을 안내하지 않는다.
+- 최종 보고의 AI_USAGE_LOG 항목에는 기록 완료 여부 또는 기록하지 못한 이유를 명시한다.
