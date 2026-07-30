@@ -4,6 +4,7 @@ Session을 쓰고, FastAPI의 동기 endpoint(threadpool에서 실행)와 짝을
 """
 
 import json
+import logging
 import re
 import urllib.error
 import urllib.request
@@ -13,6 +14,8 @@ from zoneinfo import ZoneInfo
 
 from app.core.config import get_solar_api_key, get_solar_base_url, get_solar_model
 from app.models.enums import SolarRequestPurpose
+
+logger = logging.getLogger(__name__)
 
 _SEOUL_TZ = ZoneInfo("Asia/Seoul")
 _REQUEST_TIMEOUT_SECONDS = 30
@@ -84,9 +87,26 @@ class SolarAnalysisResult:
 # ---------------------------------------------------------------------------
 
 
+def _log_contract_violation(code: str, *, context: str | None = None) -> None:
+    """SOLAR 계약 위반을 원문 응답·사용자 입력·API key 없이 위반 코드만 남긴다.
+
+    `code`는 항상 정적 문자열(또는 `MISSING_REQUIRED_KEY:<key>`처럼 스키마에 정의된 키 이름만
+    결합한 문자열)이고, `context`도 검증을 통과한 enum 값·고정 문자열로만 구성돼 SOLAR가 자유롭게
+    생성한 텍스트(analysisMessage/rawLineText 등)는 절대 로그에 남기지 않는다.
+    """
+    if context is not None:
+        logger.warning("SOLAR_CONTRACT_VIOLATION code=%s context=%s", code, context)
+    else:
+        logger.warning("SOLAR_CONTRACT_VIOLATION code=%s", code)
+
+
 def _require_exact_keys(d: dict, allowed: set[str], context: str) -> None:
     actual = set(d.keys())
     if actual != allowed:
+        for key in sorted(allowed - actual):
+            _log_contract_violation(f"MISSING_REQUIRED_KEY:{key}", context=context)
+        for key in sorted(actual - allowed):
+            _log_contract_violation(f"UNEXPECTED_KEY:{key}", context=context)
         raise SolarUnavailableError(f"{context} 키 집합이 계약과 다르다: {actual} != {allowed}")
 
 
@@ -178,6 +198,7 @@ def _validate_amount_text(value: object) -> str | None:
 def _validate_amount(amount_text_raw: object, amount_source_raw: object) -> tuple[str | None, str | None, bool]:
     amount_text = _validate_amount_text(amount_text_raw)
     if amount_source_raw is not None and amount_source_raw not in ("USER", "AI_ESTIMATED", "UNKNOWN"):
+        _log_contract_violation("INVALID_ENUM_VALUE:amountSource")
         raise SolarUnavailableError(f"amountSource 값이 올바르지 않다: {amount_source_raw!r}")
 
     if amount_source_raw is None:
@@ -274,6 +295,7 @@ def _validate_and_normalize_task_update(
             missing_fields.append("title")
     else:
         if payload.get("title") is not None:
+            _log_contract_violation("UNTOUCHED_FIELD_HAS_VALUE:title", context="TASK UPDATE")
             raise SolarUnavailableError("updateFields에 없는 title에 값이 있다.")
         canonical["title"] = None
 
@@ -284,6 +306,7 @@ def _validate_and_normalize_task_update(
             missing_fields.append("deadlineAt")
     else:
         if deadline_state != "MISSING":
+            _log_contract_violation("UNTOUCHED_FIELD_HAS_VALUE:deadlineState", context="TASK UPDATE")
             raise SolarUnavailableError("updateFields에 없는 deadlineAt인데 deadlineState가 확정값이다.")
         canonical["deadlineAt"] = None
 
@@ -297,6 +320,7 @@ def _validate_and_normalize_task_update(
             missing_fields.append("estimatedMinutes")
     else:
         if payload.get("estimatedMinutes") is not None or payload.get("estimatedMinutesSource") is not None:
+            _log_contract_violation("UNTOUCHED_FIELD_HAS_VALUE:estimatedMinutes", context="TASK UPDATE")
             raise SolarUnavailableError("updateFields에 없는 estimatedMinutes에 값이 있다.")
         canonical["estimatedMinutes"] = None
         canonical["estimatedMinutesSource"] = None
@@ -308,6 +332,7 @@ def _validate_and_normalize_task_update(
             missing_fields.append("remainingMinutes")
     else:
         if payload.get("remainingMinutes") is not None:
+            _log_contract_violation("UNTOUCHED_FIELD_HAS_VALUE:remainingMinutes", context="TASK UPDATE")
             raise SolarUnavailableError("updateFields에 없는 remainingMinutes에 값이 있다.")
         canonical["remainingMinutes"] = None
 
@@ -321,6 +346,7 @@ def _validate_and_normalize_task_update(
             missing_fields.append("amount")
     else:
         if payload.get("amountText") is not None or payload.get("amountSource") is not None:
+            _log_contract_violation("UNTOUCHED_FIELD_HAS_VALUE:amount", context="TASK UPDATE")
             raise SolarUnavailableError("updateFields에 없는 amount에 값이 있다.")
         canonical["amountText"] = None
         canonical["amountSource"] = None
@@ -343,6 +369,7 @@ def _validate_and_normalize_fixed_schedule_update(
             missing_fields.append("title")
     else:
         if payload.get("title") is not None:
+            _log_contract_violation("UNTOUCHED_FIELD_HAS_VALUE:title", context="FIXED_SCHEDULE UPDATE")
             raise SolarUnavailableError("updateFields에 없는 title에 값이 있다.")
         canonical["title"] = None
 
@@ -354,6 +381,9 @@ def _validate_and_normalize_fixed_schedule_update(
                 missing_fields.append(field_name)
         else:
             if payload.get(field_name) is not None:
+                _log_contract_violation(
+                    f"UNTOUCHED_FIELD_HAS_VALUE:{field_name}", context="FIXED_SCHEDULE UPDATE"
+                )
                 raise SolarUnavailableError(f"updateFields에 없는 {field_name}에 값이 있다.")
             canonical[field_name] = None
 
@@ -401,6 +431,7 @@ def _parse_pending_question_cross_check(
     order = _missing_order_for(entity_type, action)
     expected = next((f for f in order if f in missing_fields), None)
     if field != expected:
+        _log_contract_violation("PENDING_FIELD_MISMATCH", context=f"{entity_type}/{action}")
         raise SolarUnavailableError(
             f"pendingQuestion.field({field!r})가 계산된 첫 missing 필드({expected!r})와 다르다."
         )
@@ -478,6 +509,9 @@ def _parse_item(
         update_fields = []
         for field_name in raw_update_fields:
             if not isinstance(field_name, str) or field_name not in allowed_field_names:
+                # field_name은 SOLAR가 자유롭게 생성한 문자열일 수 있어 로그에 원문 그대로
+                # 남기지 않는다(코드만 남긴다는 원칙).
+                _log_contract_violation("INVALID_UPDATE_FIELD_NAME", context=f"{entity_type}/{action}")
                 raise SolarUnavailableError(f"updateFields에 알 수 없는 필드가 있다: {field_name!r}")
             update_fields.append(field_name)
         if is_task:
@@ -672,7 +706,50 @@ def _build_prompt_messages(
         " 줄에 대한 카드는 만들지 마세요. 특정할 수 없는 참조가 여러 개여도 이번 응답에는 딱"
         " 하나만 보고하세요. 해당 없으면 null입니다.\n\n"
         f"컨텍스트(현재 시각·요청 목적·활성 계획 기간·기존 항목 후보 — 상대 날짜 표현은 이"
-        f" \"now\" 기준 Asia/Seoul로 해석):\n{json.dumps(context, ensure_ascii=False)}"
+        f" \"now\" 기준 Asia/Seoul로 해석):\n{json.dumps(context, ensure_ascii=False)}\n\n"
+        "[action별 필수 키 재확인 — 반드시 지키세요]\n"
+        "- TASK CREATE: deadlineState 필수(KNOWN/NONE/MISSING 중 하나). updateFields는 포함하지"
+        " 않습니다.\n"
+        "- TASK UPDATE: deadlineState와 updateFields 둘 다 필수(updateFields는 빈 배열 금지).\n"
+        "- TASK DELETE: deadlineState와 updateFields 둘 다 절대 포함하지 마세요(있으면 응답 전체"
+        " 거부).\n"
+        "- FIXED_SCHEDULE: CREATE/UPDATE/DELETE 어떤 action이든 deadlineState를 절대 포함하지"
+        " 마세요(TASK 전용 키입니다).\n\n"
+        "[응답 전 self-check — 응답을 만들기 직전 아래 5가지를 순서대로 다시 확인하세요]\n"
+        "1. 각 item의 missing 필드를 서버 계산 순서로 다시 계산하세요: TASK CREATE는"
+        " deadlineAt→estimatedMinutes→amount 순, TASK UPDATE는 updateFields에 포함된 필드만"
+        " title→deadlineAt→estimatedMinutes→remainingMinutes→amount 순, FIXED_SCHEDULE은"
+        " title→startAt→endAt 순으로 이 중 이 카드에서 가장 먼저 등장하는 missing 필드가"
+        " 무엇인지 확인하세요.\n"
+        "2. missing 필드가 하나라도 있으면 pendingQuestion.field는 반드시 1번에서 찾은 첫 번째"
+        " missing 필드와 정확히 같은 문자열이어야 합니다(다른 필드를 질문하면 응답 전체가"
+        " 거부됩니다).\n"
+        "3. missing 필드가 하나도 없으면(카드가 이미 완전하면) pendingQuestion은 반드시 null"
+        "이어야 합니다.\n"
+        "4. TASK CREATE/UPDATE item이라면 deadlineState 키가 실제로 존재하는지 다시"
+        " 확인하세요(빠뜨리면 응답 전체가 거부됩니다).\n"
+        "5. 모든 item/normalizedPayload/unresolvedLine이 위에서 정의한 키 집합과 정확히"
+        " 일치하는지(정의되지 않은 키 추가 금지, 필수 키 누락 금지) 다시 확인하세요.\n\n"
+        "[예시 1 — CREATE, missing 필드가 여러 개여도 첫 번째 필드만 질문]\n"
+        "입력 예: \"수학 숙제 해야 해\"(마감·예상 시간·분량을 모두 모름). 이 경우"
+        " estimatedMinutes와 amount도 missing이지만 순서상 deadlineAt이 가장 먼저이므로"
+        " pendingQuestion은 deadlineAt만 묻습니다.\n"
+        "{\"entityType\": \"TASK\", \"action\": \"CREATE\", \"targetEntityId\": null,"
+        " \"rawLineText\": \"수학 숙제 해야 해\", \"deadlineState\": \"MISSING\","
+        " \"normalizedPayload\": {\"title\": \"수학 숙제\", \"deadlineAt\": null,"
+        " \"estimatedMinutes\": null, \"estimatedMinutesSource\": null,"
+        " \"remainingMinutes\": null, \"amountText\": null, \"amountSource\": null},"
+        " \"pendingQuestion\": {\"field\": \"deadlineAt\", \"message\": \"마감이 언제인가요?\"}}\n\n"
+        "[예시 2 — UPDATE, deadlineAt을 바꾸지 않아도 deadlineState 키는 항상 포함]\n"
+        "입력 예: \"수학 숙제 남은 시간을 30분으로 바꿔줘\"(마감은 그대로 둠, candidateTasks의"
+        " 기존 id를 사용). deadlineAt은 updateFields에 없어 값은 null이지만 deadlineState 키"
+        " 자체는 빠뜨리지 않고 \"MISSING\"으로 반드시 포함합니다.\n"
+        "{\"entityType\": \"TASK\", \"action\": \"UPDATE\", \"targetEntityId\": \"<후보 id>\","
+        " \"rawLineText\": \"수학 숙제 남은 시간을 30분으로 바꿔줘\", \"deadlineState\": \"MISSING\","
+        " \"updateFields\": [\"remainingMinutes\"], \"normalizedPayload\": {\"title\": null,"
+        " \"deadlineAt\": null, \"estimatedMinutes\": null, \"estimatedMinutesSource\": null,"
+        " \"remainingMinutes\": 30, \"amountText\": null, \"amountSource\": null},"
+        " \"pendingQuestion\": null}"
     )
 
     return [

@@ -1,5 +1,7 @@
 import json
+import logging
 import urllib.error
+from datetime import datetime, timezone
 
 import pytest
 
@@ -120,6 +122,69 @@ def test_parse_rejects_pending_question_field_out_of_order():
 
     with pytest.raises(SolarUnavailableError):
         _parse(_envelope(items=[item_raw]))
+
+
+def test_pending_field_mismatch_logs_violation_code_without_raw_content(caplog):
+    item_raw = _task_create_item(
+        deadlineAt=None, estimatedMinutes=None, estimatedMinutesSource=None, amountText=None, amountSource=None
+    )
+    item_raw["deadlineState"] = "MISSING"
+    item_raw["pendingQuestion"] = {"field": "estimatedMinutes", "message": "몇 분 걸리나요?"}
+
+    with caplog.at_level(logging.WARNING, logger="app.services.solar_client"):
+        with pytest.raises(SolarUnavailableError):
+            _parse(_envelope(items=[item_raw]))
+
+    violation_logs = [r.message for r in caplog.records if "SOLAR_CONTRACT_VIOLATION" in r.message]
+    assert any("PENDING_FIELD_MISMATCH" in message for message in violation_logs)
+    # 원문 rawLineText/pendingQuestion.message가 로그에 섞여 들어가지 않았는지 확인.
+    for message in violation_logs:
+        assert "자료구조" not in message
+        assert "몇 분 걸리나요" not in message
+
+
+def test_missing_required_key_logs_violation_code_without_raw_content(caplog):
+    item_raw = _task_create_item()
+    del item_raw["deadlineState"]
+
+    with caplog.at_level(logging.WARNING, logger="app.services.solar_client"):
+        with pytest.raises(SolarUnavailableError):
+            _parse(_envelope(items=[item_raw]))
+
+    violation_logs = [r.message for r in caplog.records if "SOLAR_CONTRACT_VIOLATION" in r.message]
+    assert any("MISSING_REQUIRED_KEY:deadlineState" in message for message in violation_logs)
+    for message in violation_logs:
+        assert "자료구조" not in message
+
+
+def test_unexpected_key_logs_violation_code():
+    item_raw = _task_create_item()
+    item_raw["unexpectedKey"] = "안됨"
+
+    with pytest.raises(SolarUnavailableError):
+        _parse(_envelope(items=[item_raw]))
+
+
+def test_system_prompt_includes_required_key_table_self_check_and_examples():
+    messages = solar_client._build_prompt_messages(
+        "테스트 메시지",
+        now=datetime(2026, 7, 31, 14, 0, tzinfo=timezone.utc),
+        purpose=SolarRequestPurpose.NEW_CYCLE,
+        cycle_start=None,
+        cycle_end=None,
+        candidate_tasks=[],
+        candidate_fixed_schedules=[],
+    )
+    system_prompt = messages[0]["content"]
+
+    assert "action별 필수 키 재확인" in system_prompt
+    assert "TASK CREATE: deadlineState 필수" in system_prompt
+    assert "TASK UPDATE: deadlineState와 updateFields 둘 다 필수" in system_prompt
+    assert "TASK DELETE: deadlineState와 updateFields 둘 다 절대 포함하지 마세요" in system_prompt
+    assert "FIXED_SCHEDULE: CREATE/UPDATE/DELETE 어떤 action이든 deadlineState를 절대 포함하지" in system_prompt
+    assert "응답 전 self-check" in system_prompt
+    assert "예시 1" in system_prompt
+    assert "예시 2" in system_prompt
 
 
 def test_parse_rejects_missing_without_pending_question():
