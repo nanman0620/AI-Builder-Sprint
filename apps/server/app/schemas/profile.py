@@ -10,6 +10,12 @@ class OnboardingRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ProfileUpdateRequest(BaseModel):
+    nickname: str
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class ProfileOut(BaseModel):
     id: uuid.UUID
     email: str
