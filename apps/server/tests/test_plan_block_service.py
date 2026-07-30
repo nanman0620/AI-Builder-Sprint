@@ -305,6 +305,159 @@ def test_validate_reschedule_source_rejects_past_or_same(new_plan_date, new_peri
 
 
 # ---------------------------------------------------------------------------
+# get_active_planning_cycle
+# ---------------------------------------------------------------------------
+
+
+class _FakeSingleQuerySession:
+    """execute() 1회 호출로 scalar_one_or_none() 결과를 돌려주는 최소 fake."""
+
+    def __init__(self, value):
+        self._value = value
+        self.last_statement = None
+
+    def execute(self, stmt):
+        self.last_statement = stmt
+        return _FakeResult(self._value)
+
+
+def test_get_active_planning_cycle_returns_cycle_when_exists():
+    cycle = _make_cycle()
+    fake_db = _FakeSingleQuerySession(cycle)
+
+    result = plan_block_service.get_active_planning_cycle(fake_db, USER_ID)
+
+    assert result is cycle
+
+
+def test_get_active_planning_cycle_returns_none_when_missing():
+    fake_db = _FakeSingleQuerySession(None)
+
+    result = plan_block_service.get_active_planning_cycle(fake_db, USER_ID)
+
+    assert result is None
+
+
+def test_get_active_planning_cycle_query_filters_by_user_and_active_status():
+    fake_db = _FakeSingleQuerySession(None)
+
+    plan_block_service.get_active_planning_cycle(fake_db, USER_ID)
+
+    sql = str(fake_db.last_statement)
+    assert "planning_cycles.user_id" in sql
+    assert "planning_cycles.status" in sql
+
+
+# ---------------------------------------------------------------------------
+# list_current_period_plan_blocks
+# ---------------------------------------------------------------------------
+
+
+class _FakeScalarsResult:
+    def __init__(self, items):
+        self._items = items
+
+    def all(self):
+        return self._items
+
+
+class _FakeListResult:
+    def __init__(self, items):
+        self._items = items
+
+    def scalars(self):
+        return _FakeScalarsResult(self._items)
+
+
+class _FakeListQuerySession:
+    """execute() 1회 호출로 scalars().all() 결과를 돌려주는 최소 fake."""
+
+    def __init__(self, items):
+        self._items = items
+        self.last_statement = None
+
+    def execute(self, stmt):
+        self.last_statement = stmt
+        return _FakeListResult(self._items)
+
+
+def test_list_current_period_plan_blocks_query_conditions():
+    fake_db = _FakeListQuerySession([])
+
+    plan_block_service.list_current_period_plan_blocks(
+        fake_db,
+        user_id=USER_ID,
+        plan_cycle_id=CYCLE_ID,
+        plan_date=date(2026, 7, 30),
+        period=PlanPeriod.AFTERNOON,
+    )
+
+    sql = str(fake_db.last_statement)
+    assert "plan_blocks.user_id" in sql
+    assert "plan_blocks.plan_cycle_id" in sql
+    assert "plan_blocks.plan_date" in sql
+    assert "plan_blocks.period" in sql
+    assert "plan_blocks.status IN" in sql
+    assert "ORDER BY plan_blocks.display_order" in sql
+
+
+def test_list_current_period_plan_blocks_returns_items_in_query_order():
+    b1 = _make_existing_block(id=uuid.uuid4(), display_order=0)
+    b2 = _make_existing_block(id=uuid.uuid4(), display_order=1)
+    fake_db = _FakeListQuerySession([b1, b2])
+
+    result = plan_block_service.list_current_period_plan_blocks(
+        fake_db,
+        user_id=USER_ID,
+        plan_cycle_id=CYCLE_ID,
+        plan_date=date(2026, 7, 30),
+        period=PlanPeriod.AFTERNOON,
+    )
+
+    assert result == [b1, b2]
+
+
+# ---------------------------------------------------------------------------
+# compute_plan_block_progress
+# ---------------------------------------------------------------------------
+
+
+def test_compute_plan_block_progress_empty_list_is_zero():
+    result = plan_block_service.compute_plan_block_progress([])
+
+    assert result == plan_block_service.PlanBlockProgress(
+        checked_count=0, total_count=0, percentage=0
+    )
+
+
+@pytest.mark.parametrize(
+    "checked, total, expected_percentage",
+    [
+        (1, 8, 13),  # 12.5 -> ROUND_HALF_UP -> 13 (명세 9절 예시와 동일)
+        (2, 3, 67),  # 66.66... -> 67 (명세 9절 예시와 동일)
+        (5, 7, 71),  # 71.42... -> 71 (명세 9절 예시와 동일)
+        (1, 2, 50),
+        (0, 5, 0),
+        (5, 5, 100),
+    ],
+)
+def test_compute_plan_block_progress_rounds_half_up(checked, total, expected_percentage):
+    blocks = [
+        _make_existing_block(id=uuid.uuid4(), status=PlanBlockStatus.CHECKED)
+        for _ in range(checked)
+    ] + [
+        _make_existing_block(id=uuid.uuid4(), status=PlanBlockStatus.PLANNED)
+        for _ in range(total - checked)
+    ]
+
+    result = plan_block_service.compute_plan_block_progress(blocks)
+
+    assert result.checked_count == checked
+    assert result.total_count == total
+    assert result.percentage == expected_percentage
+
+
+# ---------------------------------------------------------------------------
 # reschedule_plan_block — 트랜잭션 오케스트레이션. Fake Session으로 begin()의
 # 커밋/롤백 호출 여부만 검증하는 단위 테스트이며, 실제 PostgreSQL rollback을
 # 검증하는 통합 테스트가 아니다(후속 작업으로 남김).
@@ -463,5 +616,264 @@ def test_reschedule_plan_block_rolls_back_on_second_flush_failure():
     assert fake_db.deleted == [existing]
     assert len(fake_db.added) == 1
     assert fake_db.flush_calls == 2
+    assert fake_db.recorder.rolled_back is True
+    assert fake_db.recorder.committed is False
+
+
+# ---------------------------------------------------------------------------
+# set_plan_block_check_state — 소유권·활성 cycle·날짜·분기·정산·상태 전이 검증과
+# 진행률 재계산까지 하나의 트랜잭션으로 처리하는지 확인한다.
+# ---------------------------------------------------------------------------
+
+CHECK_STATE_NOW = datetime(2026, 7, 30, 14, 0, tzinfo=SEOUL_TZ)
+CHECK_STATE_PLAN_DATE = date(2026, 7, 30)
+CHECK_STATE_PERIOD = PlanPeriod.AFTERNOON
+
+
+class _CheckStateFakeSession:
+    """execute() 호출 순서: 1) PlanBlock(FOR UPDATE), 2) 활성 PlanningCycle,
+    3) (검증 통과 시에만) 현재 분기 PlanBlock 목록. flush/refresh는 in-memory 객체를
+    그대로 쓰므로 아무 것도 하지 않는다."""
+
+    def __init__(self, *, block, cycle, current_blocks=()):
+        self._block = block
+        self._cycle = cycle
+        self._current_blocks = list(current_blocks)
+        self._execute_calls = 0
+        self.for_update_seen = False
+        self.recorder = _TransactionRecorder()
+
+    def begin(self):
+        return _FakeTransaction(self.recorder)
+
+    def execute(self, stmt):
+        self._execute_calls += 1
+        if self._execute_calls == 1:
+            self.for_update_seen = "FOR UPDATE" in str(stmt).upper()
+            return _FakeResult(self._block)
+        if self._execute_calls == 2:
+            return _FakeResult(self._cycle)
+        return _FakeListResult(self._current_blocks)
+
+    def flush(self):
+        pass
+
+    def refresh(self, obj):
+        pass
+
+
+def _set_check_state(fake_db, **overrides):
+    kwargs = dict(
+        user_id=USER_ID,
+        plan_block_id=EXISTING_BLOCK_ID,
+        checked=True,
+        now=CHECK_STATE_NOW,
+    )
+    kwargs.update(overrides)
+    return plan_block_service.set_plan_block_check_state(fake_db, **kwargs)
+
+
+def test_set_plan_block_check_state_planned_to_checked_success():
+    block = _make_existing_block(
+        status=PlanBlockStatus.PLANNED, plan_date=CHECK_STATE_PLAN_DATE, period=CHECK_STATE_PERIOD
+    )
+    cycle = _make_cycle()
+    fake_db = _CheckStateFakeSession(block=block, cycle=cycle, current_blocks=[block])
+
+    result = _set_check_state(fake_db, checked=True)
+
+    assert result.plan_block.status == PlanBlockStatus.CHECKED
+    assert result.plan_block.checked_at == CHECK_STATE_NOW
+    assert fake_db.for_update_seen is True
+    assert fake_db.recorder.committed is True
+    assert fake_db.recorder.rolled_back is False
+
+
+def test_set_plan_block_check_state_checked_to_planned_success():
+    block = _make_existing_block(
+        status=PlanBlockStatus.CHECKED,
+        checked_at=CHECK_STATE_NOW,
+        plan_date=CHECK_STATE_PLAN_DATE,
+        period=CHECK_STATE_PERIOD,
+    )
+    cycle = _make_cycle()
+    fake_db = _CheckStateFakeSession(block=block, cycle=cycle, current_blocks=[block])
+
+    result = _set_check_state(fake_db, checked=False)
+
+    assert result.plan_block.status == PlanBlockStatus.PLANNED
+    assert result.plan_block.checked_at is None
+
+
+def test_set_plan_block_check_state_sets_checked_at_when_checking():
+    block = _make_existing_block(
+        status=PlanBlockStatus.PLANNED,
+        checked_at=None,
+        plan_date=CHECK_STATE_PLAN_DATE,
+        period=CHECK_STATE_PERIOD,
+    )
+    cycle = _make_cycle()
+    fake_db = _CheckStateFakeSession(block=block, cycle=cycle, current_blocks=[block])
+
+    result = _set_check_state(fake_db, checked=True)
+
+    assert result.plan_block.checked_at == CHECK_STATE_NOW
+
+
+def test_set_plan_block_check_state_clears_checked_at_when_unchecking():
+    block = _make_existing_block(
+        status=PlanBlockStatus.CHECKED,
+        checked_at=CHECK_STATE_NOW,
+        plan_date=CHECK_STATE_PLAN_DATE,
+        period=CHECK_STATE_PERIOD,
+    )
+    cycle = _make_cycle()
+    fake_db = _CheckStateFakeSession(block=block, cycle=cycle, current_blocks=[block])
+
+    result = _set_check_state(fake_db, checked=False)
+
+    assert result.plan_block.checked_at is None
+
+
+def test_set_plan_block_check_state_rejects_missing_block():
+    cycle = _make_cycle()
+    fake_db = _CheckStateFakeSession(block=None, cycle=cycle)
+
+    with pytest.raises(ApiError) as exc_info:
+        _set_check_state(fake_db)
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.code == plan_block_service.CODE_PLAN_BLOCK_NOT_FOUND
+    assert fake_db.recorder.rolled_back is True
+    assert fake_db.recorder.committed is False
+
+
+def test_set_plan_block_check_state_rejects_no_active_cycle():
+    block = _make_existing_block(plan_date=CHECK_STATE_PLAN_DATE, period=CHECK_STATE_PERIOD)
+    fake_db = _CheckStateFakeSession(block=block, cycle=None)
+
+    with pytest.raises(ApiError) as exc_info:
+        _set_check_state(fake_db)
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.code == plan_block_service.CODE_BLOCK_NOT_IN_CURRENT_PERIOD
+
+
+def test_set_plan_block_check_state_rejects_cycle_mismatch():
+    block = _make_existing_block(
+        plan_cycle_id=OTHER_CYCLE_ID, plan_date=CHECK_STATE_PLAN_DATE, period=CHECK_STATE_PERIOD
+    )
+    cycle = _make_cycle()  # id=CYCLE_ID
+    fake_db = _CheckStateFakeSession(block=block, cycle=cycle)
+
+    with pytest.raises(ApiError) as exc_info:
+        _set_check_state(fake_db)
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.code == plan_block_service.CODE_BLOCK_NOT_IN_CURRENT_PERIOD
+
+
+def test_set_plan_block_check_state_rejects_date_mismatch():
+    block = _make_existing_block(plan_date=date(2026, 7, 29), period=CHECK_STATE_PERIOD)
+    cycle = _make_cycle()
+    fake_db = _CheckStateFakeSession(block=block, cycle=cycle)
+
+    with pytest.raises(ApiError) as exc_info:
+        _set_check_state(fake_db)
+
+    assert exc_info.value.code == plan_block_service.CODE_BLOCK_NOT_IN_CURRENT_PERIOD
+
+
+def test_set_plan_block_check_state_rejects_period_mismatch():
+    block = _make_existing_block(plan_date=CHECK_STATE_PLAN_DATE, period=PlanPeriod.MORNING)
+    cycle = _make_cycle()
+    fake_db = _CheckStateFakeSession(block=block, cycle=cycle)
+
+    with pytest.raises(ApiError) as exc_info:
+        _set_check_state(fake_db)
+
+    assert exc_info.value.code == plan_block_service.CODE_BLOCK_NOT_IN_CURRENT_PERIOD
+
+
+def test_set_plan_block_check_state_rejects_already_finalized():
+    block = _make_existing_block(
+        status=PlanBlockStatus.COMPLETED,
+        checked_at=CHECK_STATE_NOW,
+        check_in_id=uuid.uuid4(),
+        plan_date=CHECK_STATE_PLAN_DATE,
+        period=CHECK_STATE_PERIOD,
+    )
+    cycle = _make_cycle()
+    fake_db = _CheckStateFakeSession(block=block, cycle=cycle)
+
+    with pytest.raises(ApiError) as exc_info:
+        _set_check_state(fake_db, checked=False)
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.code == plan_block_service.CODE_PERIOD_ALREADY_FINALIZED
+
+
+def test_set_plan_block_check_state_rejects_checking_when_not_planned():
+    block = _make_existing_block(
+        status=PlanBlockStatus.CHECKED,
+        checked_at=CHECK_STATE_NOW,
+        plan_date=CHECK_STATE_PLAN_DATE,
+        period=CHECK_STATE_PERIOD,
+    )
+    cycle = _make_cycle()
+    fake_db = _CheckStateFakeSession(block=block, cycle=cycle)
+
+    with pytest.raises(ApiError) as exc_info:
+        _set_check_state(fake_db, checked=True)
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.code == plan_block_service.CODE_INVALID_CHECK_STATE
+
+
+def test_set_plan_block_check_state_rejects_unchecking_when_not_checked():
+    block = _make_existing_block(
+        status=PlanBlockStatus.PLANNED, plan_date=CHECK_STATE_PLAN_DATE, period=CHECK_STATE_PERIOD
+    )
+    cycle = _make_cycle()
+    fake_db = _CheckStateFakeSession(block=block, cycle=cycle)
+
+    with pytest.raises(ApiError) as exc_info:
+        _set_check_state(fake_db, checked=False)
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.code == plan_block_service.CODE_INVALID_CHECK_STATE
+
+
+def test_set_plan_block_check_state_recomputes_progress_after_change():
+    target = _make_existing_block(
+        status=PlanBlockStatus.PLANNED, plan_date=CHECK_STATE_PLAN_DATE, period=CHECK_STATE_PERIOD
+    )
+    other_checked = _make_existing_block(
+        id=uuid.uuid4(),
+        status=PlanBlockStatus.CHECKED,
+        plan_date=CHECK_STATE_PLAN_DATE,
+        period=CHECK_STATE_PERIOD,
+    )
+    cycle = _make_cycle()
+    # 재조회 시점에는 target도 CHECKED로 반영된 상태로 돌아온다고 가정한다(같은 in-memory 객체).
+    fake_db = _CheckStateFakeSession(
+        block=target, cycle=cycle, current_blocks=[target, other_checked]
+    )
+
+    result = _set_check_state(fake_db, checked=True)
+
+    assert result.progress.total_count == 2
+    assert result.progress.checked_count == 2
+    assert result.progress.percentage == 100
+
+
+def test_set_plan_block_check_state_rolls_back_on_validation_error():
+    block = _make_existing_block(plan_date=date(2026, 7, 1), period=CHECK_STATE_PERIOD)
+    cycle = _make_cycle()
+    fake_db = _CheckStateFakeSession(block=block, cycle=cycle)
+
+    with pytest.raises(ApiError):
+        _set_check_state(fake_db)
+
     assert fake_db.recorder.rolled_back is True
     assert fake_db.recorder.committed is False
