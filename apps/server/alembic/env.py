@@ -5,7 +5,7 @@ from sqlalchemy import engine_from_config, pool
 
 from app.core.config import get_database_url
 from app.db.base import Base
-from app.models.user_profile import UserProfile  # noqa: F401  user_profiles + auth.users stub 등록
+from app import models  # noqa: F401  전체 앱 테이블(9개) + auth.users stub 등록
 
 config = context.config
 if config.config_file_name is not None:
