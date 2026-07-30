@@ -1,10 +1,26 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.health import router as health_router
 from app.api.v1.me import router as me_router
 from app.core.errors import register_exception_handlers
 
 app = FastAPI(title="이음(E-um) MVP API")
+
+DEV_ALLOWED_ORIGINS = [
+    "http://localhost:8081",
+    "http://localhost:8082",
+    "http://127.0.0.1:8081",
+    "http://127.0.0.1:8082",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=DEV_ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 register_exception_handlers(app)
 
