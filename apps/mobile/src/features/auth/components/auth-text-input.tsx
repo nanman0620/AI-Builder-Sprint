@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { StyleSheet, Text, TextInput, TouchableOpacity, View, type TextInputProps } from 'react-native';
-import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 import { colors, spacing } from '@/src/constants/tokens';
+import { AuthMaterialIcon } from '@/src/features/auth/components/auth-material-icon';
 
 type AuthTextInputProps = TextInputProps & {
   label?: string;
@@ -42,7 +42,7 @@ export function AuthTextInput({
           <TouchableOpacity
             onPress={() => setIsVisible((prev) => !prev)}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <MaterialIcons
+            <AuthMaterialIcon
               name={isVisible ? 'visibility' : 'visibility-off'}
               size={16}
               color={colors.textSecondary}
