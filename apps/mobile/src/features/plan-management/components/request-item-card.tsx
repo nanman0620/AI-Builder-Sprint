@@ -1,0 +1,85 @@
+import { StyleSheet, Text, View } from 'react-native';
+
+import { colors, spacing, typography } from '@/src/constants/tokens';
+
+import type { SolarRequestItem } from '../types';
+
+// 캡처(UI-014/UI-015)의 고정 일정 배지 색은 공용 디자인 토큰에 없어 이 컴포넌트에서만 쓴다.
+const FIXED_SCHEDULE_BADGE_BACKGROUND = '#DBEAFE';
+const FIXED_SCHEDULE_BADGE_TEXT = '#2563EB';
+
+type RequestItemCardProps = {
+  item: SolarRequestItem;
+  highlighted?: boolean;
+};
+
+// 제목·상태 문구·배지 문구는 서버가 내려주는 title/summaryText/statusLabel/entityLabel을
+// 그대로 표시한다. deadlineAt/amountText/estimatedMinutes 등으로 프론트에서 다시 조합하지 않는다.
+export function RequestItemCard({ item, highlighted = false }: RequestItemCardProps) {
+  const isInfoMissing = item.status === 'INFO_MISSING';
+  const isFixedSchedule = item.entityType === 'FIXED_SCHEDULE';
+
+  return (
+    <View style={[styles.card, highlighted && styles.cardHighlighted]}>
+      <View style={styles.header}>
+        <Text style={styles.title} numberOfLines={1}>
+          {item.title}
+        </Text>
+        <View
+          style={[
+            styles.badge,
+            { backgroundColor: isFixedSchedule ? FIXED_SCHEDULE_BADGE_BACKGROUND : colors.primarySoft },
+          ]}>
+          <Text
+            style={[styles.badgeText, { color: isFixedSchedule ? FIXED_SCHEDULE_BADGE_TEXT : colors.primary }]}>
+            {item.entityLabel}
+          </Text>
+        </View>
+      </View>
+      <Text style={[styles.statusLine, isInfoMissing && styles.statusLineError]}>{item.summaryText}</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  card: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  cardHighlighted: {
+    borderColor: colors.primary,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  title: {
+    ...typography.body,
+    fontWeight: '700',
+    color: colors.text,
+    flex: 1,
+    marginRight: spacing.sm,
+  },
+  badge: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  badgeText: {
+    ...typography.caption,
+    fontWeight: '600',
+  },
+  statusLine: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginTop: spacing.xs,
+  },
+  statusLineError: {
+    color: colors.error,
+  },
+});
