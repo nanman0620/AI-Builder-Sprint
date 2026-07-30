@@ -33,7 +33,7 @@ python -m pip install -e ".[dev]"
 
 ### 4. 환경변수 설정
 
-`.env.example`을 복사해 `apps/server/.env`를 만들고 `DATABASE_URL`에 실제 Supabase PostgreSQL 연결 문자열을 채운다. `.env`는 Git에 포함되지 않는다.
+`.env.example`을 복사해 `apps/server/.env`를 만들고 `DATABASE_URL`과 `SUPABASE_URL`을 모두 설정한다. `.env`는 Git에 포함되지 않는다.
 
 ```powershell
 copy .env.example .env
@@ -64,5 +64,6 @@ pytest
 | 변수 | 설명 |
 | --- | --- |
 | `DATABASE_URL` | Supabase PostgreSQL 연결 문자열 |
+| `SUPABASE_URL` | Supabase Access Token의 JWKS 및 issuer 검증에 사용하는 프로젝트 URL |
 
 실제 값은 `.env.example`이 아니라 로컬 `apps/server/.env`(git 제외)에만 설정한다.
