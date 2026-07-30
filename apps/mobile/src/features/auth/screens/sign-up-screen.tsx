@@ -2,9 +2,9 @@ import { useState } from 'react';
 import { Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 import { colors } from '@/src/constants/tokens';
+import { AuthMaterialIcon } from '@/src/features/auth/components/auth-material-icon';
 import { AuthSubmitButton } from '@/src/features/auth/components/auth-submit-button';
 import { AuthTextInput } from '@/src/features/auth/components/auth-text-input';
 import { toSignUpErrorMessage, AUTH_NETWORK_ERROR_MESSAGE } from '@/src/features/auth/errors';
@@ -139,7 +139,7 @@ export function SignUpScreen() {
           <View style={styles.content}>
             <View style={styles.header}>
               <Pressable onPress={handleBack} hitSlop={12} disabled={isSubmitting}>
-                <MaterialIcons name="arrow-back" size={22} color={colors.text} />
+                <AuthMaterialIcon name="arrow-back" size={22} color={colors.text} />
               </Pressable>
               <Text style={styles.headerTitle}>회원가입</Text>
               <View style={styles.headerSpacer} />
@@ -183,7 +183,7 @@ export function SignUpScreen() {
             />
 
             <Pressable style={styles.termsRow} onPress={handleToggleTerms} disabled={isSubmitting}>
-              <MaterialIcons
+              <AuthMaterialIcon
                 name={agreedToTerms ? 'check-box' : 'check-box-outline-blank'}
                 size={20}
                 color={agreedToTerms ? colors.primary : colors.textSecondary}
