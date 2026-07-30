@@ -241,6 +241,17 @@ class PlanBlockProgress:
     percentage: int
 
 
+def calculate_plan_percentage(completed_count: int, total_count: int) -> int:
+    """PlanBlock 개수 비율을 Decimal + ROUND_HALF_UP으로 정수화한다."""
+    if total_count <= 0:
+        return 0
+    return int(
+        (Decimal(completed_count) * 100 / Decimal(total_count)).quantize(
+            Decimal("1"), rounding=ROUND_HALF_UP
+        )
+    )
+
+
 def compute_plan_block_progress(blocks: Sequence[PlanBlock]) -> PlanBlockProgress:
     """PLANNED/CHECKED PlanBlock 목록으로부터 진행률을 계산한다.
 
@@ -251,9 +262,7 @@ def compute_plan_block_progress(blocks: Sequence[PlanBlock]) -> PlanBlockProgres
     if total == 0:
         return PlanBlockProgress(checked_count=0, total_count=0, percentage=0)
 
-    percentage = int(
-        (Decimal(checked) * 100 / Decimal(total)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-    )
+    percentage = calculate_plan_percentage(checked, total)
     return PlanBlockProgress(checked_count=checked, total_count=total, percentage=percentage)
 
 
