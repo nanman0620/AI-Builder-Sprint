@@ -35,27 +35,56 @@ export type BootstrapPlanManagement = {
 
 export type PlanPeriod = 'MORNING' | 'AFTERNOON' | 'EVENING';
 
-export type HomeMode =
-  | 'NO_ACTIVE_CYCLE'
-  | 'NO_PLANS'
-  | 'IN_PROGRESS'
-  | 'FINALIZING'
-  | 'CHECK_IN_RESULT'
-  | 'DEADLINE_WARNING';
+// DEADLINE_WARNING은 homeMode 값이 아니라 blockingNotice.type이다(API 명세서 9-1 GET /home/current,
+// 화면 흐름 PDF 5-5절). blockingNotice=DEADLINE_WARNING이어도 homeMode는 그 아래 실제 상태(예: IN_PROGRESS)를
+// 그대로 유지한 채 내려온다. FE-06 조사 중 발견한 타입 불일치를 이번에 바로잡는다.
+export type HomeMode = 'NO_ACTIVE_CYCLE' | 'NO_PLANS' | 'IN_PROGRESS' | 'FINALIZING' | 'CHECK_IN_RESULT';
 
-// blockingNotice·progress·planBlocks 항목의 세부 필드는 홈 6개 상태 UI를 구현하는 FE-06의 소유 영역이다.
-export type BootstrapHomeBlockingNotice = Record<string, unknown>;
-export type BootstrapHomeProgress = Record<string, unknown>;
-export type BootstrapHomePlanBlock = Record<string, unknown>;
+// GET /bootstrap과 GET /home/current가 공통으로 쓰는 홈 하위 구조. 두 endpoint 모두 이 타입들을
+// 그대로 참조하며 중복 정의하지 않는다(홈 전용 응답 타입 HomeCurrentResponse·CheckInResult는 src/features/home/types.ts 소유).
+export type HomeProgress = {
+  checkedCount: number;
+  totalCount: number;
+  percentage: number;
+};
+
+// 현재 분기 PlanBlock 한 행. status는 정산 전 PLANNED/CHECKED만 존재한다(COMPLETED/NOT_DONE은
+// 정산 후 CheckInResult.completedPlans/notDonePlans에서만 나타난다).
+export type HomePlanBlock = {
+  id: string;
+  taskId: string;
+  planDate: string;
+  period: PlanPeriod;
+  allocatedMinutes: number;
+  allocatedAmountText: string | null;
+  displayTitle: string;
+  displayOrder: number;
+  status: 'PLANNED' | 'CHECKED';
+  checkedAt: string | null;
+};
+
+export type DeadlineWarningItem = {
+  taskId: string;
+  title: string;
+  deadlineAt: string;
+  requiredMinutes: number;
+  availableMinutes: number;
+  shortageMinutes: number;
+};
+
+export type HomeBlockingNotice = {
+  type: 'DEADLINE_WARNING';
+  items: DeadlineWarningItem[];
+};
 
 export type BootstrapHome = {
   logicalDate: string;
   period: PlanPeriod;
   homeMode: HomeMode;
-  blockingNotice: BootstrapHomeBlockingNotice | null;
+  blockingNotice: HomeBlockingNotice | null;
   activeCycle: BootstrapActiveCycle | null;
-  progress: BootstrapHomeProgress | null;
-  planBlocks: BootstrapHomePlanBlock[];
+  progress: HomeProgress | null;
+  planBlocks: HomePlanBlock[];
 };
 
 export type BootstrapProfile = {

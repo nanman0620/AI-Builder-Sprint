@@ -1,10 +1,5 @@
-import { RoutePlaceholder } from '@/src/components/common/route-placeholder';
+import { HomeScreen } from '@/src/features/home/screens/home-screen';
 
-export default function HomeScreen() {
-  return (
-    <RoutePlaceholder
-      title="홈"
-      description="NO_ACTIVE_CYCLE·NO_PLANS·IN_PROGRESS 등 서버 상태별 화면은 후속 UI Issue에서 구현합니다."
-    />
-  );
+export default function Home() {
+  return <HomeScreen />;
 }

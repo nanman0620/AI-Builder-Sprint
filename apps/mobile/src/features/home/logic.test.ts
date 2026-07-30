@@ -1,0 +1,152 @@
+// 순수 함수 테스트다. RN/Expo 의존성이 없어 로컬 tsc로 CommonJS로 컴파일한 뒤
+// `node --test`로 실행할 수 있다(apps/mobile/src/features/bootstrap/route.test.ts와 동일한 방식).
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+
+import {
+  applyOptimisticCheckState,
+  computeOptimisticProgress,
+  formatLogicalDateBadge,
+  formatPeriodLabel,
+  resolveHomeMascotKey,
+  resolveScoreBand,
+  resolveVisibleHomeState,
+  shouldHideTabBar,
+  sortPlanBlocksByDisplayOrder,
+} from './logic';
+import type { HomePlanBlock } from '../bootstrap/types';
+
+function makeBlock(overrides: Partial<HomePlanBlock> = {}): HomePlanBlock {
+  return {
+    id: 'block-1',
+    taskId: 'task-1',
+    planDate: '2026-07-29',
+    period: 'AFTERNOON',
+    allocatedMinutes: 60,
+    allocatedAmountText: null,
+    displayTitle: '기본 할 일',
+    displayOrder: 1,
+    status: 'PLANNED',
+    checkedAt: null,
+    ...overrides,
+  };
+}
+
+// docs/ai/IMPLEMENTATION_CONTEXT.md 8절 "홈 우선순위" 6단계.
+test('FINALIZING이 CHECK_IN_RESULT·DEADLINE_WARNING보다 우선한다', () => {
+  const result = resolveVisibleHomeState({
+    homeMode: 'FINALIZING',
+    blockingNotice: { type: 'DEADLINE_WARNING', items: [{ taskId: 't', title: 'x', deadlineAt: '', requiredMinutes: 1, availableMinutes: 1, shortageMinutes: 0 }] },
+  });
+  assert.equal(result, 'FINALIZING');
+});
+
+test('CHECK_IN_RESULT가 DEADLINE_WARNING보다 우선한다', () => {
+  const result = resolveVisibleHomeState({
+    homeMode: 'CHECK_IN_RESULT',
+    blockingNotice: { type: 'DEADLINE_WARNING', items: [{ taskId: 't', title: 'x', deadlineAt: '', requiredMinutes: 1, availableMinutes: 1, shortageMinutes: 0 }] },
+  });
+  assert.equal(result, 'CHECK_IN_RESULT');
+});
+
+test('blockingNotice.items가 비어 있으면 DEADLINE_WARNING을 표시하지 않는다', () => {
+  const result = resolveVisibleHomeState({
+    homeMode: 'IN_PROGRESS',
+    blockingNotice: { type: 'DEADLINE_WARNING', items: [] },
+  });
+  assert.equal(result, 'IN_PROGRESS');
+});
+
+test('blockingNotice가 null이면 homeMode를 그대로 쓴다', () => {
+  const result = resolveVisibleHomeState({ homeMode: 'NO_PLANS', blockingNotice: null });
+  assert.equal(result, 'NO_PLANS');
+});
+
+test('blockingNotice가 있으면 homeMode가 IN_PROGRESS가 아니어도 DEADLINE_WARNING을 표시한다', () => {
+  const result = resolveVisibleHomeState({
+    homeMode: 'IN_PROGRESS',
+    blockingNotice: { type: 'DEADLINE_WARNING', items: [{ taskId: 't', title: 'x', deadlineAt: '', requiredMinutes: 1, availableMinutes: 1, shortageMinutes: 0 }] },
+  });
+  assert.equal(result, 'DEADLINE_WARNING');
+});
+
+test('NO_ACTIVE_CYCLE·NO_PLANS·IN_PROGRESS는 각각 그대로 매핑된다', () => {
+  assert.equal(resolveVisibleHomeState({ homeMode: 'NO_ACTIVE_CYCLE', blockingNotice: null }), 'NO_ACTIVE_CYCLE');
+  assert.equal(resolveVisibleHomeState({ homeMode: 'NO_PLANS', blockingNotice: null }), 'NO_PLANS');
+  assert.equal(resolveVisibleHomeState({ homeMode: 'IN_PROGRESS', blockingNotice: null }), 'IN_PROGRESS');
+});
+
+test('하단 탭 숨김 대상은 FINALIZING·CHECK_IN_RESULT·DEADLINE_WARNING뿐이다', () => {
+  assert.equal(shouldHideTabBar('FINALIZING'), true);
+  assert.equal(shouldHideTabBar('CHECK_IN_RESULT'), true);
+  assert.equal(shouldHideTabBar('DEADLINE_WARNING'), true);
+  assert.equal(shouldHideTabBar('NO_ACTIVE_CYCLE'), false);
+  assert.equal(shouldHideTabBar('NO_PLANS'), false);
+  assert.equal(shouldHideTabBar('IN_PROGRESS'), false);
+});
+
+// UI_REFERENCE.md 점수별 마스코트 선택 규칙 경계값: 0/29/30/59/60/99/100.
+test('점수 구간 경계값이 정확히 나뉜다', () => {
+  assert.equal(resolveScoreBand(0), 'SCORE_00');
+  assert.equal(resolveScoreBand(29), 'SCORE_00');
+  assert.equal(resolveScoreBand(30), 'SCORE_30');
+  assert.equal(resolveScoreBand(59), 'SCORE_30');
+  assert.equal(resolveScoreBand(60), 'SCORE_60');
+  assert.equal(resolveScoreBand(99), 'SCORE_60');
+  assert.equal(resolveScoreBand(100), 'SCORE_100');
+});
+
+test('마스코트 매핑: DEADLINE_WARNING=SAD, NO_ACTIVE_CYCLE=READING, 나머지=DEFAULT', () => {
+  assert.equal(resolveHomeMascotKey('DEADLINE_WARNING'), 'SAD');
+  assert.equal(resolveHomeMascotKey('NO_ACTIVE_CYCLE'), 'READING');
+  assert.equal(resolveHomeMascotKey('NO_PLANS'), 'DEFAULT');
+  assert.equal(resolveHomeMascotKey('IN_PROGRESS'), 'DEFAULT');
+  assert.equal(resolveHomeMascotKey('FINALIZING'), 'DEFAULT');
+});
+
+test('period 라벨 변환', () => {
+  assert.equal(formatPeriodLabel('MORNING'), '오전');
+  assert.equal(formatPeriodLabel('AFTERNOON'), '오후');
+  assert.equal(formatPeriodLabel('EVENING'), '저녁');
+});
+
+test('displayOrder 기준 정렬은 원본 배열을 바꾸지 않는다', () => {
+  const blocks = [makeBlock({ id: 'b', displayOrder: 2 }), makeBlock({ id: 'a', displayOrder: 1 })];
+  const sorted = sortPlanBlocksByDisplayOrder(blocks);
+  assert.deepEqual(sorted.map((b) => b.id), ['a', 'b']);
+  assert.deepEqual(blocks.map((b) => b.id), ['b', 'a']);
+});
+
+test('optimistic 체크는 해당 id만 바꾸고 displayTitle 등 나머지 필드는 유지한다', () => {
+  const blocks = [makeBlock({ id: 'a', status: 'PLANNED' }), makeBlock({ id: 'b', status: 'PLANNED' })];
+  const next = applyOptimisticCheckState(blocks, 'a', true, '2026-07-29T10:00:00+09:00');
+  assert.equal(next[0].status, 'CHECKED');
+  assert.equal(next[0].checkedAt, '2026-07-29T10:00:00+09:00');
+  assert.equal(next[0].displayTitle, blocks[0].displayTitle);
+  assert.equal(next[1].status, 'PLANNED');
+});
+
+test('optimistic 체크 해제는 checkedAt을 null로 되돌린다', () => {
+  const blocks = [makeBlock({ id: 'a', status: 'CHECKED', checkedAt: '2026-07-29T10:00:00+09:00' })];
+  const next = applyOptimisticCheckState(blocks, 'a', false, '2026-07-29T11:00:00+09:00');
+  assert.equal(next[0].status, 'PLANNED');
+  assert.equal(next[0].checkedAt, null);
+});
+
+test('optimistic progress는 checked/total 개수 기준이다(시간 비율 아님)', () => {
+  const blocks = [
+    makeBlock({ id: 'a', status: 'CHECKED' }),
+    makeBlock({ id: 'b', status: 'CHECKED' }),
+    makeBlock({ id: 'c', status: 'PLANNED' }),
+  ];
+  assert.deepEqual(computeOptimisticProgress(blocks), { checkedCount: 2, totalCount: 3, percentage: 67 });
+});
+
+test('optimistic progress는 PlanBlock이 없으면 0%다', () => {
+  assert.deepEqual(computeOptimisticProgress([]), { checkedCount: 0, totalCount: 0, percentage: 0 });
+});
+
+test('logicalDate 배지 포맷은 기기 로컬 타임존과 무관하게 같은 날짜를 표시한다', () => {
+  assert.equal(formatLogicalDateBadge('2026-07-26'), '7월 26일 일요일');
+  assert.equal(formatLogicalDateBadge('2026-01-01'), '1월 1일 목요일');
+});

@@ -1,0 +1,132 @@
+// 홈 화면의 상태 판정·표시용 순수 함수 모음. RN 의존성이 없어 apps/mobile/src/features/bootstrap/route.ts와
+// 같은 방식으로 `node --test`로 검증한다.
+import type {
+  HomeBlockingNotice,
+  HomeMode,
+  HomePlanBlock,
+  HomeProgress,
+  PlanPeriod,
+} from '../bootstrap/types';
+
+export type VisibleHomeState =
+  | 'FINALIZING'
+  | 'CHECK_IN_RESULT'
+  | 'DEADLINE_WARNING'
+  | 'NO_ACTIVE_CYCLE'
+  | 'NO_PLANS'
+  | 'IN_PROGRESS';
+
+// docs/ai/IMPLEMENTATION_CONTEXT.md 8절 "홈 우선순위" 6단계를 그대로 코드로 옮긴 것.
+// DEADLINE_WARNING은 homeMode가 아니라 blockingNotice 위에 얹히는 blocking notice이므로,
+// blockingNotice가 없거나 items가 비어 있으면 이 상태를 표시하지 않고 아래 homeMode로 내려간다.
+export function resolveVisibleHomeState(input: {
+  homeMode: HomeMode;
+  blockingNotice: HomeBlockingNotice | null;
+}): VisibleHomeState {
+  if (input.homeMode === 'FINALIZING') {
+    return 'FINALIZING';
+  }
+  if (input.homeMode === 'CHECK_IN_RESULT') {
+    return 'CHECK_IN_RESULT';
+  }
+  if (input.blockingNotice?.type === 'DEADLINE_WARNING' && input.blockingNotice.items.length > 0) {
+    return 'DEADLINE_WARNING';
+  }
+  if (input.homeMode === 'NO_ACTIVE_CYCLE') {
+    return 'NO_ACTIVE_CYCLE';
+  }
+  if (input.homeMode === 'NO_PLANS') {
+    return 'NO_PLANS';
+  }
+  return 'IN_PROGRESS';
+}
+
+// FINALIZING/CHECK_IN_RESULT/DEADLINE_WARNING(blockingNotice)에서만 하단 탭을 숨긴다(§10).
+export function shouldHideTabBar(visibleState: VisibleHomeState): boolean {
+  return visibleState === 'FINALIZING' || visibleState === 'CHECK_IN_RESULT' || visibleState === 'DEADLINE_WARNING';
+}
+
+export type HomeMascotKey = 'DEFAULT' | 'READING' | 'SAD';
+
+// CHECK_IN_RESULT는 점수 기반 마스코트(resolveScoreBand)를 별도로 쓰므로 이 함수의 대상이 아니다.
+// UI_REFERENCE.md 4절 자산 용도표: mascot-reading=계획 없음/새 계획 안내, mascot-sad=오류/마감 경고/실패,
+// mascot-default=기본/성공/진행.
+export function resolveHomeMascotKey(visibleState: Exclude<VisibleHomeState, 'CHECK_IN_RESULT'>): HomeMascotKey {
+  if (visibleState === 'DEADLINE_WARNING') {
+    return 'SAD';
+  }
+  if (visibleState === 'NO_ACTIVE_CYCLE') {
+    return 'READING';
+  }
+  return 'DEFAULT';
+}
+
+export type ScoreBand = 'SCORE_00' | 'SCORE_30' | 'SCORE_60' | 'SCORE_100';
+
+// UI_REFERENCE.md "점수별 마스코트 선택 규칙": 0<=score<30, 30<=score<60, 60<=score<100, score=100.
+export function resolveScoreBand(score: number): ScoreBand {
+  if (score >= 100) {
+    return 'SCORE_100';
+  }
+  if (score >= 60) {
+    return 'SCORE_60';
+  }
+  if (score >= 30) {
+    return 'SCORE_30';
+  }
+  return 'SCORE_00';
+}
+
+// logicalDate("YYYY-MM-DD")를 "7월 29일 수요일" 형태로만 표시한다. 기기 로컬 타임존에 따라 날짜가
+// 밀리지 않도록 UTC로 고정해 구성·포맷하며, 오늘 날짜를 다시 계산하지 않고 서버가 준 문자열만 그대로 쓴다.
+export function formatLogicalDateBadge(logicalDate: string): string {
+  const [year, month, day] = logicalDate.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  const formatter = new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'UTC',
+    month: 'long',
+    day: 'numeric',
+    weekday: 'long',
+  });
+  return formatter.format(date);
+}
+
+const PERIOD_LABELS: Record<PlanPeriod, string> = {
+  MORNING: '오전',
+  AFTERNOON: '오후',
+  EVENING: '저녁',
+};
+
+// 서버가 내려준 period 값을 화면 문구용 한글 라벨로만 바꾼다. 논리 날짜·분기를 다시 계산하지 않는다.
+export function formatPeriodLabel(period: PlanPeriod): string {
+  return PERIOD_LABELS[period];
+}
+
+// displayOrder 기준 오름차순 정렬. 원본 배열을 변경하지 않는다.
+export function sortPlanBlocksByDisplayOrder(planBlocks: HomePlanBlock[]): HomePlanBlock[] {
+  return [...planBlocks].sort((a, b) => a.displayOrder - b.displayOrder);
+}
+
+// 체크 optimistic update: 로컬에서 해당 PlanBlock의 status/checkedAt만 뒤집는다.
+// displayTitle·allocatedMinutes 등 나머지 필드는 그대로 유지한다(재조합 금지).
+export function applyOptimisticCheckState(
+  planBlocks: HomePlanBlock[],
+  planBlockId: string,
+  checked: boolean,
+  checkedAtIso: string
+): HomePlanBlock[] {
+  return planBlocks.map((block) =>
+    block.id === planBlockId
+      ? { ...block, status: checked ? 'CHECKED' : 'PLANNED', checkedAt: checked ? checkedAtIso : null }
+      : block
+  );
+}
+
+// docs/ai/IMPLEMENTATION_CONTEXT.md 8절 "진행률": 완료 개수/전체 개수(=PLANNED+CHECKED), 시간 비율이 아니다.
+// 서버 응답이 오기 전까지의 로컬 예측치이며, 성공 응답이 오면 서버 progress로 덮어쓴다.
+export function computeOptimisticProgress(planBlocks: HomePlanBlock[]): HomeProgress {
+  const totalCount = planBlocks.length;
+  const checkedCount = planBlocks.filter((block) => block.status === 'CHECKED').length;
+  const percentage = totalCount > 0 ? Math.round((checkedCount / totalCount) * 100) : 0;
+  return { checkedCount, totalCount, percentage };
+}
