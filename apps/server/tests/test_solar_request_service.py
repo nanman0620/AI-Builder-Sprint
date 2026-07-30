@@ -1,6 +1,9 @@
 import uuid
 from datetime import datetime, timezone
 
+import pytest
+
+from app.core.errors import ApiError
 from app.models.enums import SolarRequestPurpose, SolarRequestStatus
 from app.models.solar_request import SolarRequest
 from app.services import solar_request_service
@@ -141,3 +144,39 @@ def test_resolve_no_request_screen_mode_without_active_cycle():
     result = solar_request_service.resolve_no_request_screen_mode(has_active_cycle=False)
 
     assert result == solar_request_service.PlanManagementScreenMode.NEW_CYCLE_ENTRY
+
+
+# ---------------------------------------------------------------------------
+# get_owned_solar_request
+# ---------------------------------------------------------------------------
+
+
+def test_get_owned_solar_request_query_conditions():
+    fake_db = _FakeSession(None)
+    request_id = uuid.uuid4()
+
+    with pytest.raises(ApiError):
+        solar_request_service.get_owned_solar_request(fake_db, request_id, USER_ID)
+
+    sql = str(fake_db.last_statement)
+    assert "solar_requests.id" in sql
+    assert "solar_requests.user_id" in sql
+
+
+def test_get_owned_solar_request_returns_the_row():
+    request = _make_request(status=SolarRequestStatus.COMPLETED, result_acknowledged_at=None)
+    fake_db = _FakeSession(request)
+
+    result = solar_request_service.get_owned_solar_request(fake_db, request.id, USER_ID)
+
+    assert result is request
+
+
+def test_get_owned_solar_request_raises_404_when_missing():
+    fake_db = _FakeSession(None)
+
+    with pytest.raises(ApiError) as exc_info:
+        solar_request_service.get_owned_solar_request(fake_db, uuid.uuid4(), USER_ID)
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.code == "REQUEST_NOT_FOUND"
