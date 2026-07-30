@@ -7,6 +7,11 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "tzdata; sys_platform == 'win32'",
+    "sqlalchemy",
+    "psycopg[binary]",
+    "alembic",
+    "python-dotenv",
+    "PyJWT[crypto]>=2.8,<3",
 ]
 
 [project.optional-dependencies]
