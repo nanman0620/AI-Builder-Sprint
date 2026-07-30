@@ -1,0 +1,21 @@
+# Node / Expo
+node_modules/
+.expo/
+dist/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# macOS
+.DS_Store
+
+.claude/settings.local.json
