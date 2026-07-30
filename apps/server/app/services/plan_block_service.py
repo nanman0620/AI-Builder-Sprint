@@ -1,12 +1,15 @@
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Sequence
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
-from app.models.enums import PlanBlockStatus, PlanPeriod
+from app.models.enums import PlanBlockStatus, PlanCycleStatus, PlanPeriod
 from app.models.plan_block import PlanBlock
 from app.models.planning_cycle import PlanningCycle
 
@@ -28,6 +31,10 @@ CODE_INVALID_REQUEST_STATE = "INVALID_REQUEST_STATE"
 CODE_PLAN_BLOCK_CYCLE_MISMATCH = "PLAN_BLOCK_CYCLE_MISMATCH"
 CODE_PLAN_BLOCK_TASK_MISMATCH = "PLAN_BLOCK_TASK_MISMATCH"
 CODE_PLAN_BLOCK_RESCHEDULE_NOT_IN_FUTURE = "PLAN_BLOCK_RESCHEDULE_NOT_IN_FUTURE"
+# 아래 3개는 명세 11절 오류 코드표에 정의된 공식 code를 그대로 쓴다.
+CODE_BLOCK_NOT_IN_CURRENT_PERIOD = "BLOCK_NOT_IN_CURRENT_PERIOD"
+CODE_PERIOD_ALREADY_FINALIZED = "PERIOD_ALREADY_FINALIZED"
+CODE_INVALID_CHECK_STATE = "INVALID_CHECK_STATE"
 
 
 def _require_aware(moment: datetime, *, param_name: str) -> None:
@@ -185,6 +192,69 @@ def get_owned_planning_cycle(
     return cycle
 
 
+def get_active_planning_cycle(db: Session, user_id: uuid.UUID) -> PlanningCycle | None:
+    """사용자의 현재 ACTIVE PlanningCycle을 조회한다. 없으면 None.
+
+    사용자당 ACTIVE cycle은 partial UNIQUE index(uq_planning_cycles_one_active_per_user)로
+    DB가 최대 1개만 존재함을 보장하므로 scalar_one_or_none()을 그대로 쓴다.
+    """
+    return db.execute(
+        select(PlanningCycle).where(
+            PlanningCycle.user_id == user_id, PlanningCycle.status == PlanCycleStatus.ACTIVE
+        )
+    ).scalar_one_or_none()
+
+
+def list_current_period_plan_blocks(
+    db: Session,
+    *,
+    user_id: uuid.UUID,
+    plan_cycle_id: uuid.UUID,
+    plan_date: date,
+    period: PlanPeriod,
+) -> list[PlanBlock]:
+    """현재 분기에 홈에 표시할 PlanBlock 목록을 표시 순서대로 조회한다.
+
+    PLANNED/CHECKED만 포함한다(COMPLETED/NOT_DONE은 정산 완료 상태이므로 제외).
+    홈 조회와 check-state 변경 후 진행률 재계산에서 공통으로 사용한다.
+    """
+    stmt = (
+        select(PlanBlock)
+        .where(
+            PlanBlock.user_id == user_id,
+            PlanBlock.plan_cycle_id == plan_cycle_id,
+            PlanBlock.plan_date == plan_date,
+            PlanBlock.period == period,
+            PlanBlock.status.in_((PlanBlockStatus.PLANNED, PlanBlockStatus.CHECKED)),
+        )
+        .order_by(PlanBlock.display_order)
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+@dataclass(frozen=True)
+class PlanBlockProgress:
+    checked_count: int
+    total_count: int
+    percentage: int
+
+
+def compute_plan_block_progress(blocks: Sequence[PlanBlock]) -> PlanBlockProgress:
+    """PLANNED/CHECKED PlanBlock 목록으로부터 진행률을 계산한다.
+
+    percentage는 Decimal + ROUND_HALF_UP으로 반올림한다(명세 9절 CheckIn 점수 계산과 동일 방식).
+    """
+    total = len(blocks)
+    checked = sum(1 for block in blocks if block.status == PlanBlockStatus.CHECKED)
+    if total == 0:
+        return PlanBlockProgress(checked_count=0, total_count=0, percentage=0)
+
+    percentage = int(
+        (Decimal(checked) * 100 / Decimal(total)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    )
+    return PlanBlockProgress(checked_count=checked, total_count=total, percentage=percentage)
+
+
 def reschedule_plan_block(
     db: Session,
     *,
@@ -255,3 +325,71 @@ def reschedule_plan_block(
         db.flush()
 
     return new_block
+
+
+@dataclass(frozen=True)
+class PlanBlockCheckStateResult:
+    plan_block: PlanBlock
+    progress: PlanBlockProgress
+
+
+def set_plan_block_check_state(
+    db: Session,
+    *,
+    user_id: uuid.UUID,
+    plan_block_id: uuid.UUID,
+    checked: bool,
+    now: datetime,
+) -> PlanBlockCheckStateResult:
+    """현재 분기 PlanBlock의 체크 상태를 변경하고, 변경 후 진행률을 함께 반환한다.
+
+    동시 요청으로 상태가 꼬이지 않도록 대상 행을 SELECT ... FOR UPDATE로 잠근 뒤
+    같은 트랜잭션 안에서 검증·UPDATE·진행률 재계산을 모두 수행한다.
+    """
+    with db.begin():
+        block = get_owned_plan_block(db, plan_block_id, user_id, for_update=True)
+        cycle = get_active_planning_cycle(db, user_id)
+
+        current_plan_date = resolve_plan_date(now)
+        current_period = resolve_period(now)
+
+        if (
+            cycle is None
+            or block.plan_cycle_id != cycle.id
+            or block.plan_date != current_plan_date
+            or block.period != current_period
+        ):
+            raise ApiError(
+                409,
+                CODE_BLOCK_NOT_IN_CURRENT_PERIOD,
+                "현재 분기의 계획만 체크할 수 있어요.",
+            )
+
+        if block.check_in_id is not None:
+            # check_in_id가 있으면 status_consistency 제약상 COMPLETED/NOT_DONE이며 정산이 끝난 상태다.
+            raise ApiError(409, CODE_PERIOD_ALREADY_FINALIZED, "이미 정산이 끝난 계획이에요.")
+
+        if checked:
+            if block.status != PlanBlockStatus.PLANNED:
+                raise ApiError(422, CODE_INVALID_CHECK_STATE, "체크할 수 없는 상태예요.")
+            block.status = PlanBlockStatus.CHECKED
+            block.checked_at = now
+        else:
+            if block.status != PlanBlockStatus.CHECKED:
+                raise ApiError(422, CODE_INVALID_CHECK_STATE, "체크를 해제할 수 없는 상태예요.")
+            block.status = PlanBlockStatus.PLANNED
+            block.checked_at = None
+
+        db.flush()
+        db.refresh(block)
+
+        current_blocks = list_current_period_plan_blocks(
+            db,
+            user_id=user_id,
+            plan_cycle_id=cycle.id,
+            plan_date=current_plan_date,
+            period=current_period,
+        )
+        progress = compute_plan_block_progress(current_blocks)
+
+    return PlanBlockCheckStateResult(plan_block=block, progress=progress)
