@@ -902,6 +902,23 @@ def test_create_solar_request_solar_failure_maps_to_503_and_no_writes(monkeypatc
     assert fake_db.added == []
 
 
+def test_create_solar_request_final_repair_failure_maps_to_503_and_no_writes(monkeypatch):
+    """analyze_message 내부에서 canonicalization + repair 1회까지 시도한 뒤에도 최종
+    실패하면(SolarUnavailableError에 code가 실려 있어도) create_solar_request는 여전히
+    503 SOLAR_UNAVAILABLE로 매핑하고 어떤 DB 행도 저장하지 않는다."""
+    _patch_analyze_message(
+        monkeypatch, error=SolarUnavailableError("repair도 실패했다.", code="PENDING_FIELD_MISMATCH")
+    )
+    fake_db = _CreateFakeSession(current_request_sequence=[None], active_cycle_sequence=[None])
+
+    with pytest.raises(ApiError) as exc_info:
+        _call_create(fake_db, client_event_id="evt-repair-fail", message="새 과제")
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.code == "SOLAR_UNAVAILABLE"
+    assert fake_db.added == []
+
+
 def test_create_solar_request_integrity_error_replay_branch(monkeypatch, patch_plan_management_state):
     item = _create_item()
     analysis = SolarAnalysisResult(analysis_message="분석 완료", items=[item], unresolved_line=None)

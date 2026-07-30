@@ -52,7 +52,17 @@ _FS_PAYLOAD_KEYS = {"title", "startAt", "endAt"}
 
 
 class SolarUnavailableError(Exception):
-    """네트워크 실패·타임아웃·비2xx·JSON 계약 위반을 전부 이 예외 하나로 통일한다."""
+    """네트워크 실패·타임아웃·비2xx·JSON 계약 위반을 전부 이 예외 하나로 통일한다.
+
+    `code`는 계약 위반의 종류를 나타내는 짧은 식별자(`_log_contract_violation`이 로그로 남기는
+    코드와 동일한 값)로, repair 프롬프트 구성에 쓰인다. 항상 정적 문자열이거나 우리 스키마의
+    키 이름만으로 구성돼 SOLAR가 자유 생성한 원문은 절대 담지 않는다. 특별히 분류되지 않은
+    위반(네트워크 실패 등 포함)은 기본값을 쓴다.
+    """
+
+    def __init__(self, message: str, *, code: str = "SOLAR_CONTRACT_VIOLATION"):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -103,11 +113,18 @@ def _log_contract_violation(code: str, *, context: str | None = None) -> None:
 def _require_exact_keys(d: dict, allowed: set[str], context: str) -> None:
     actual = set(d.keys())
     if actual != allowed:
+        codes = []
         for key in sorted(allowed - actual):
-            _log_contract_violation(f"MISSING_REQUIRED_KEY:{key}", context=context)
+            code = f"MISSING_REQUIRED_KEY:{key}"
+            _log_contract_violation(code, context=context)
+            codes.append(code)
         for key in sorted(actual - allowed):
-            _log_contract_violation(f"UNEXPECTED_KEY:{key}", context=context)
-        raise SolarUnavailableError(f"{context} 키 집합이 계약과 다르다: {actual} != {allowed}")
+            code = f"UNEXPECTED_KEY:{key}"
+            _log_contract_violation(code, context=context)
+            codes.append(code)
+        raise SolarUnavailableError(
+            f"{context} 키 집합이 계약과 다르다: {actual} != {allowed}", code=",".join(codes)
+        )
 
 
 def _require_non_blank_str(value: object, context: str) -> str:
@@ -199,7 +216,9 @@ def _validate_amount(amount_text_raw: object, amount_source_raw: object) -> tupl
     amount_text = _validate_amount_text(amount_text_raw)
     if amount_source_raw is not None and amount_source_raw not in ("USER", "AI_ESTIMATED", "UNKNOWN"):
         _log_contract_violation("INVALID_ENUM_VALUE:amountSource")
-        raise SolarUnavailableError(f"amountSource 값이 올바르지 않다: {amount_source_raw!r}")
+        raise SolarUnavailableError(
+            f"amountSource 값이 올바르지 않다: {amount_source_raw!r}", code="INVALID_ENUM_VALUE:amountSource"
+        )
 
     if amount_source_raw is None:
         if amount_text is not None:
@@ -296,7 +315,9 @@ def _validate_and_normalize_task_update(
     else:
         if payload.get("title") is not None:
             _log_contract_violation("UNTOUCHED_FIELD_HAS_VALUE:title", context="TASK UPDATE")
-            raise SolarUnavailableError("updateFields에 없는 title에 값이 있다.")
+            raise SolarUnavailableError(
+                "updateFields에 없는 title에 값이 있다.", code="UNTOUCHED_FIELD_HAS_VALUE:title"
+            )
         canonical["title"] = None
 
     deadline_at, deadline_missing_signal = _validate_deadline_state(deadline_state, payload.get("deadlineAt"))
@@ -307,7 +328,10 @@ def _validate_and_normalize_task_update(
     else:
         if deadline_state != "MISSING":
             _log_contract_violation("UNTOUCHED_FIELD_HAS_VALUE:deadlineState", context="TASK UPDATE")
-            raise SolarUnavailableError("updateFields에 없는 deadlineAt인데 deadlineState가 확정값이다.")
+            raise SolarUnavailableError(
+                "updateFields에 없는 deadlineAt인데 deadlineState가 확정값이다.",
+                code="UNTOUCHED_FIELD_HAS_VALUE:deadlineState",
+            )
         canonical["deadlineAt"] = None
 
     if "estimatedMinutes" in fields:
@@ -321,7 +345,10 @@ def _validate_and_normalize_task_update(
     else:
         if payload.get("estimatedMinutes") is not None or payload.get("estimatedMinutesSource") is not None:
             _log_contract_violation("UNTOUCHED_FIELD_HAS_VALUE:estimatedMinutes", context="TASK UPDATE")
-            raise SolarUnavailableError("updateFields에 없는 estimatedMinutes에 값이 있다.")
+            raise SolarUnavailableError(
+                "updateFields에 없는 estimatedMinutes에 값이 있다.",
+                code="UNTOUCHED_FIELD_HAS_VALUE:estimatedMinutes",
+            )
         canonical["estimatedMinutes"] = None
         canonical["estimatedMinutesSource"] = None
 
@@ -333,7 +360,10 @@ def _validate_and_normalize_task_update(
     else:
         if payload.get("remainingMinutes") is not None:
             _log_contract_violation("UNTOUCHED_FIELD_HAS_VALUE:remainingMinutes", context="TASK UPDATE")
-            raise SolarUnavailableError("updateFields에 없는 remainingMinutes에 값이 있다.")
+            raise SolarUnavailableError(
+                "updateFields에 없는 remainingMinutes에 값이 있다.",
+                code="UNTOUCHED_FIELD_HAS_VALUE:remainingMinutes",
+            )
         canonical["remainingMinutes"] = None
 
     if "amount" in fields:
@@ -347,7 +377,9 @@ def _validate_and_normalize_task_update(
     else:
         if payload.get("amountText") is not None or payload.get("amountSource") is not None:
             _log_contract_violation("UNTOUCHED_FIELD_HAS_VALUE:amount", context="TASK UPDATE")
-            raise SolarUnavailableError("updateFields에 없는 amount에 값이 있다.")
+            raise SolarUnavailableError(
+                "updateFields에 없는 amount에 값이 있다.", code="UNTOUCHED_FIELD_HAS_VALUE:amount"
+            )
         canonical["amountText"] = None
         canonical["amountSource"] = None
 
@@ -370,7 +402,9 @@ def _validate_and_normalize_fixed_schedule_update(
     else:
         if payload.get("title") is not None:
             _log_contract_violation("UNTOUCHED_FIELD_HAS_VALUE:title", context="FIXED_SCHEDULE UPDATE")
-            raise SolarUnavailableError("updateFields에 없는 title에 값이 있다.")
+            raise SolarUnavailableError(
+                "updateFields에 없는 title에 값이 있다.", code="UNTOUCHED_FIELD_HAS_VALUE:title"
+            )
         canonical["title"] = None
 
     for field_name in ("startAt", "endAt"):
@@ -381,10 +415,9 @@ def _validate_and_normalize_fixed_schedule_update(
                 missing_fields.append(field_name)
         else:
             if payload.get(field_name) is not None:
-                _log_contract_violation(
-                    f"UNTOUCHED_FIELD_HAS_VALUE:{field_name}", context="FIXED_SCHEDULE UPDATE"
-                )
-                raise SolarUnavailableError(f"updateFields에 없는 {field_name}에 값이 있다.")
+                code = f"UNTOUCHED_FIELD_HAS_VALUE:{field_name}"
+                _log_contract_violation(code, context="FIXED_SCHEDULE UPDATE")
+                raise SolarUnavailableError(f"updateFields에 없는 {field_name}에 값이 있다.", code=code)
             canonical[field_name] = None
 
     if canonical["startAt"] is not None and canonical["endAt"] is not None:
@@ -433,7 +466,8 @@ def _parse_pending_question_cross_check(
     if field != expected:
         _log_contract_violation("PENDING_FIELD_MISMATCH", context=f"{entity_type}/{action}")
         raise SolarUnavailableError(
-            f"pendingQuestion.field({field!r})가 계산된 첫 missing 필드({expected!r})와 다르다."
+            f"pendingQuestion.field({field!r})가 계산된 첫 missing 필드({expected!r})와 다르다.",
+            code="PENDING_FIELD_MISMATCH",
         )
     return {"field": field, "message": message}
 
@@ -509,10 +543,12 @@ def _parse_item(
         update_fields = []
         for field_name in raw_update_fields:
             if not isinstance(field_name, str) or field_name not in allowed_field_names:
-                # field_name은 SOLAR가 자유롭게 생성한 문자열일 수 있어 로그에 원문 그대로
+                # field_name은 SOLAR가 자유롭게 생성한 문자열일 수 있어 로그·code에 원문 그대로
                 # 남기지 않는다(코드만 남긴다는 원칙).
                 _log_contract_violation("INVALID_UPDATE_FIELD_NAME", context=f"{entity_type}/{action}")
-                raise SolarUnavailableError(f"updateFields에 알 수 없는 필드가 있다: {field_name!r}")
+                raise SolarUnavailableError(
+                    f"updateFields에 알 수 없는 필드가 있다: {field_name!r}", code="INVALID_UPDATE_FIELD_NAME"
+                )
             update_fields.append(field_name)
         if is_task:
             missing_fields, canonical_payload = _validate_and_normalize_task_update(
@@ -631,6 +667,96 @@ def parse_solar_response(
     ]
 
     return SolarAnalysisResult(analysis_message=analysis_message, items=items, unresolved_line=unresolved_line)
+
+
+# ---------------------------------------------------------------------------
+# canonicalization — strict parser 앞단에서 좁은 whitelist 조건에만 정확히 일치하는 값을
+# 정규화한다. 아래 3가지 조건 밖의 값은 절대 임의로 보정하지 않는다(fuzzy mapping 금지).
+# ---------------------------------------------------------------------------
+
+
+def _canonicalize_amount_missing_sentinel(payload: dict) -> None:
+    """amountSource="MISSING"이고 amountText가 null/공백이면 둘 다 null로 정규화한다.
+
+    amountSource의 유효값은 null/USER/AI_ESTIMATED/UNKNOWN뿐이라 "MISSING"은 원래 항상
+    계약 위반이다 — deadlineState의 "MISSING"과 혼동한 것으로 추정되는, 실제로 관측된 실패
+    유형 하나를 그대로 흡수한다.
+    """
+    if payload.get("amountSource") != "MISSING":
+        return
+    amount_text = payload.get("amountText")
+    if amount_text is None or (isinstance(amount_text, str) and not amount_text.strip()):
+        payload["amountSource"] = None
+        payload["amountText"] = None
+
+
+def _canonicalize_untouched_deadline_state(item: dict) -> None:
+    """TASK UPDATE에서 deadlineAt이 updateFields에 없으면 deadlineState=MISSING,
+    normalizedPayload.deadlineAt=null로 정규화한다(그 필드는 "안 건드림" 규칙상 이 값만 유효하다).
+
+    deadlineAt이 updateFields에 있는 경우는 절대 건드리지 않는다 — 그 경우 새 값을 추측할
+    안전한 근거가 없어 이 정규화 대상이 아니다(strict parser·repair로 넘긴다).
+    """
+    update_fields = item.get("updateFields")
+    if not isinstance(update_fields, list) or "deadlineAt" in update_fields:
+        return
+    payload = item.get("normalizedPayload")
+    if not isinstance(payload, dict):
+        return
+    item["deadlineState"] = "MISSING"
+    payload["deadlineAt"] = None
+
+
+def _canonicalize_update_field_amount_text_alias(item: dict) -> None:
+    """TASK UPDATE의 updateFields 항목 중 "amountText"는 정확한 이름인 "amount"로만
+    정규화한다(그 외 필드 이름은 손대지 않는다). 중복 방지를 위해 이미 "amount"가 있으면
+    합친다."""
+    update_fields = item.get("updateFields")
+    if not isinstance(update_fields, list) or "amountText" not in update_fields:
+        return
+    canonical: list = []
+    seen: set = set()
+    for field_name in update_fields:
+        name = "amount" if field_name == "amountText" else field_name
+        if name not in seen:
+            canonical.append(name)
+            seen.add(name)
+    item["updateFields"] = canonical
+
+
+def _canonicalize_response_dict(raw: dict) -> dict:
+    items = raw.get("items")
+    if not isinstance(items, list):
+        return raw
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("entityType") != "TASK":
+            continue
+        payload = item.get("normalizedPayload")
+        if isinstance(payload, dict):
+            _canonicalize_amount_missing_sentinel(payload)
+        if item.get("action") == "UPDATE":
+            _canonicalize_untouched_deadline_state(item)
+            _canonicalize_update_field_amount_text_alias(item)
+    return raw
+
+
+def _canonicalize_response_content(content: str) -> str:
+    """strict parser에 넘기기 전 좁은 whitelist 3가지만 정규화하는 pre-pass.
+
+    JSON이 아니거나 최상위가 dict가 아니면 그대로 반환해 `parse_solar_response`가 원래
+    에러를 내도록 둔다(canonicalization이 파싱 자체를 대신하지 않는다). 정의된 3가지 조건
+    밖의 값은 이 함수도, 이 함수가 호출하는 어떤 헬퍼도 보정하지 않는다.
+    """
+    try:
+        raw = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return content
+    if not isinstance(raw, dict):
+        return content
+    canonicalized = _canonicalize_response_dict(raw)
+    return json.dumps(canonicalized, ensure_ascii=False)
 
 
 def _build_prompt_messages(
@@ -818,6 +944,25 @@ def call_solar(payload: dict) -> str:
     return content
 
 
+def _build_repair_messages(
+    original_messages: list[dict], first_response_content: str, violation_code: str
+) -> list[dict]:
+    """기존 대화 컨텍스트(system+user) + 직전 응답 + 교정 요청 한 턴으로 repair 프롬프트를
+    만든다. `violation_code`는 우리 스키마 키 이름·정적 문자열로만 구성돼 SOLAR가 자유
+    생성했을 수 있는 원문은 담지 않는다."""
+    repair_instruction = (
+        "직전 응답이 JSON 계약을 위반했습니다(위반 코드: "
+        f"{violation_code}). 위 system 지침(특히 action별 필수 키 표와 응답 전 self-check"
+        " 규칙)을 다시 확인하고, 직전 응답을 완전히 대체하는 올바른 JSON 하나만 다시"
+        " 출력하세요. 설명·마크다운·코드블록 없이 JSON 객체만 응답하세요."
+    )
+    return [
+        *original_messages,
+        {"role": "assistant", "content": first_response_content},
+        {"role": "user", "content": repair_instruction},
+    ]
+
+
 def analyze_message(
     message: str,
     *,
@@ -828,8 +973,16 @@ def analyze_message(
     candidate_tasks: list[dict] | None = None,
     candidate_fixed_schedules: list[dict] | None = None,
 ) -> SolarAnalysisResult:
-    """`call_solar` → `parse_solar_response` 순서로 호출하는 단일 진입점(전부 동기). 서비스
-    계층은 이 함수 하나만 호출·mock한다."""
+    """`call_solar` → canonicalize → `parse_solar_response` 순서로 호출하는 단일 진입점(전부
+    동기). 서비스 계층은 이 함수 하나만 호출·mock한다.
+
+    계약 위반(파싱·검증 실패)이면 원본 응답·위반 코드·기존 대화를 그대로 활용해 SOLAR에
+    JSON 교정을 한 번만 요청한다(repair). timeout·HTTP 오류·연결 실패 등 전송 계층 오류는
+    `call_solar`에서 즉시 전파되며 이 repair 대상이 아니다(첫 호출·repair 호출 모두 동일).
+    `call_solar`는 이 함수 안에서 최대 2회(원본 1회 + repair 1회)만 호출된다. repair 응답도
+    반드시 같은 canonicalize + strict parser를 다시 통과해야 하며, 그래도 실패하면 예외가
+    그대로 전파돼(저장 없이) 호출자가 503으로 매핑한다.
+    """
     candidate_tasks = candidate_tasks or []
     candidate_fixed_schedules = candidate_fixed_schedules or []
 
@@ -842,13 +995,27 @@ def analyze_message(
         candidate_tasks=candidate_tasks,
         candidate_fixed_schedules=candidate_fixed_schedules,
     )
-    content = call_solar({"messages": messages})
-
     candidate_task_ids = {str(candidate["id"]) for candidate in candidate_tasks}
     candidate_fixed_schedule_ids = {str(candidate["id"]) for candidate in candidate_fixed_schedules}
 
+    content = call_solar({"messages": messages})
+    canonical_content = _canonicalize_response_content(content)
+    try:
+        return parse_solar_response(
+            canonical_content,
+            purpose=purpose,
+            candidate_task_ids=candidate_task_ids,
+            candidate_fixed_schedule_ids=candidate_fixed_schedule_ids,
+        )
+    except SolarUnavailableError as first_violation:
+        violation_code = first_violation.code
+
+    logger.warning("SOLAR_REPAIR_ATTEMPT code=%s", violation_code)
+    repair_messages = _build_repair_messages(messages, content, violation_code)
+    repair_content = call_solar({"messages": repair_messages})
+    canonical_repair_content = _canonicalize_response_content(repair_content)
     return parse_solar_response(
-        content,
+        canonical_repair_content,
         purpose=purpose,
         candidate_task_ids=candidate_task_ids,
         candidate_fixed_schedule_ids=candidate_fixed_schedule_ids,
