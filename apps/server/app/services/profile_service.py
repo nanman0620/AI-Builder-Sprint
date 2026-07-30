@@ -17,3 +17,15 @@ def get_user_email(db: Session, user_id: uuid.UUID) -> str | None:
     return db.execute(
         select(auth_users.c.email).where(auth_users.c.id == user_id)
     ).scalar_one_or_none()
+
+
+def update_nickname(db: Session, user_id: uuid.UUID, nickname: str) -> UserProfile | None:
+    """현재 사용자의 닉네임만 수정하고 DB trigger가 갱신한 최신 행을 반환한다."""
+    profile = db.get(UserProfile, user_id)
+    if profile is None:
+        return None
+
+    profile.nickname = nickname
+    db.flush()
+    db.refresh(profile)
+    return profile
