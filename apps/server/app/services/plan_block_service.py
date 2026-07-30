@@ -1,17 +1,19 @@
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Sequence
+from typing import Iterator, Sequence
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
-from app.models.enums import PlanBlockStatus, PlanCycleStatus, PlanPeriod
+from app.models.enums import PlanBlockStatus, PlanCycleStatus, PlanPeriod, TaskStatus
+from app.models.fixed_schedule import FixedSchedule
 from app.models.plan_block import PlanBlock
 from app.models.planning_cycle import PlanningCycle
+from app.models.task import Task
 
 _SEOUL_TZ = ZoneInfo("Asia/Seoul")
 
@@ -393,3 +395,345 @@ def set_plan_block_check_state(
         progress = compute_plan_block_progress(current_blocks)
 
     return PlanBlockCheckStateResult(plan_block=block, progress=progress)
+
+
+# ---------------------------------------------------------------------------
+# PlanBlock 자동 배치 및 재계획 엔진 (Issue #39)
+# ---------------------------------------------------------------------------
+
+_PERIOD_ORDER_LIST = [PlanPeriod.MORNING, PlanPeriod.AFTERNOON, PlanPeriod.EVENING]
+_PERIOD_START_HOUR = {PlanPeriod.MORNING: 4, PlanPeriod.AFTERNOON: 12, PlanPeriod.EVENING: 18}
+_PERIOD_DURATION_HOURS = {PlanPeriod.MORNING: 8, PlanPeriod.AFTERNOON: 6, PlanPeriod.EVENING: 10}
+_PERIOD_CAPACITY_MINUTES = 240
+_FAR_FUTURE = datetime.max.replace(tzinfo=timezone.utc)
+
+
+def _period_window(plan_date: date, period: PlanPeriod) -> tuple[datetime, datetime]:
+    """plan_date+period의 실제 시각 구간 [start, end)를 반환한다."""
+    start_hour = _PERIOD_START_HOUR[period]
+    start = datetime(plan_date.year, plan_date.month, plan_date.day, start_hour, 0, tzinfo=_SEOUL_TZ)
+    end = start + timedelta(hours=_PERIOD_DURATION_HOURS[period])
+    return start, end
+
+
+def _iter_periods_from(
+    start_date: date, start_period: PlanPeriod, end_date: date
+) -> Iterator[tuple[date, PlanPeriod]]:
+    """start_date/start_period부터 end_date의 EVENING까지 시간순으로 (날짜, 분기)를 순회한다."""
+    current_date = start_date
+    idx = _PERIOD_ORDER_LIST.index(start_period)
+    while current_date <= end_date:
+        while idx < len(_PERIOD_ORDER_LIST):
+            yield current_date, _PERIOD_ORDER_LIST[idx]
+            idx += 1
+        idx = 0
+        current_date += timedelta(days=1)
+
+
+def _union_minutes(
+    intervals: Sequence[tuple[datetime, datetime]], window_start: datetime, window_end: datetime
+) -> int:
+    """intervals를 [window_start, window_end)로 자른 뒤 합집합 구간의 총 분 수를 계산한다.
+
+    여러 구간이 겹쳐도 겹치는 부분을 한 번만 계산한다(중복 차감 방지).
+    """
+    clipped: list[tuple[datetime, datetime]] = []
+    for start, end in intervals:
+        clipped_start = max(start, window_start)
+        clipped_end = min(end, window_end)
+        if clipped_start < clipped_end:
+            clipped.append((clipped_start, clipped_end))
+
+    if not clipped:
+        return 0
+
+    clipped.sort(key=lambda interval: interval[0])
+    total_minutes = 0
+    merged_start, merged_end = clipped[0]
+    for start, end in clipped[1:]:
+        if start <= merged_end:
+            merged_end = max(merged_end, end)
+        else:
+            total_minutes += int((merged_end - merged_start).total_seconds() // 60)
+            merged_start, merged_end = start, end
+    total_minutes += int((merged_end - merged_start).total_seconds() // 60)
+    return total_minutes
+
+
+def _compute_cycle_end_at(cycle: PlanningCycle) -> datetime:
+    """cycle_end_at = end_date 다음 날 04:00 Asia/Seoul."""
+    next_day = cycle.end_date + timedelta(days=1)
+    return datetime(next_day.year, next_day.month, next_day.day, 4, 0, tzinfo=_SEOUL_TZ)
+
+
+def _compute_planning_deadline_at(task: Task, cycle_end_at: datetime) -> datetime | None:
+    """배치용 마감. 실제 마감(deadline_at)과 cycle 종료 시각 중 빠른 시각. 마감 모름은 None."""
+    if task.deadline_at is None:
+        return None
+    return min(task.deadline_at, cycle_end_at)
+
+
+def compute_period_capacity(
+    db: Session,
+    *,
+    user_id: uuid.UUID,
+    plan_date: date,
+    period: PlanPeriod,
+    is_current_period: bool,
+    now: datetime,
+    checked_minutes: int = 0,
+) -> int:
+    """미래/현재 분기의 신규 PLANNED 배치 가능 분을 계산한다(명세 11절 분기 용량 제약).
+
+    - 미래 분기: max(0, 240 - 고정일정 합집합)
+    - 현재 분기: min(remaining_capacity_by_limit, remaining_clock_available_minutes)
+    """
+    window_start, window_end = _period_window(plan_date, period)
+
+    fixed_schedules = (
+        db.execute(
+            select(FixedSchedule).where(
+                FixedSchedule.user_id == user_id,
+                FixedSchedule.start_at < window_end,
+                FixedSchedule.end_at > window_start,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    intervals = [(fs.start_at, fs.end_at) for fs in fixed_schedules]
+
+    if not is_current_period:
+        occupied = _union_minutes(intervals, window_start, window_end)
+        return max(0, _PERIOD_CAPACITY_MINUTES - occupied)
+
+    full_period_occupied = _union_minutes(intervals, window_start, window_end)
+    remaining_capacity_by_limit = max(
+        0, _PERIOD_CAPACITY_MINUTES - checked_minutes - full_period_occupied
+    )
+
+    clock_start = max(now, window_start)
+    remaining_clock_minutes = max(0, int((window_end - clock_start).total_seconds() // 60))
+    future_occupied = _union_minutes(intervals, clock_start, window_end)
+    remaining_clock_available_minutes = max(0, remaining_clock_minutes - future_occupied)
+
+    return min(remaining_capacity_by_limit, remaining_clock_available_minutes)
+
+
+def _build_fallback_display_title(task: Task) -> str:
+    """SOLAR 연동 전까지 사용하는 임시 fallback이다.
+
+    명세는 display_title을 "제목+분량+시간을 기계적으로 연결한 계산값이 아니라 SOLAR가
+    실행 단위에 맞게 확정하는 표시 문구"로 규정한다. 이 Issue는 SOLAR 자연어 분석을
+    제외 범위로 두므로, 그 대체 문구를 만들어내지 않고 task.title을 그대로 사용한다.
+    실제 SOLAR 연동 시 이 함수를 교체해야 한다.
+    """
+    return task.title
+
+
+@dataclass(frozen=True)
+class ScheduleResult:
+    created_blocks: list[PlanBlock]
+    # task_id -> cycle 종료까지 배치하지 못한 분. 마감 임박 경고의 shortage_minutes(명세 18절)와는
+    # 다른 개념이며, 이 값은 "현재 시점부터 cycle 끝까지 용량이 부족해 배치하지 못한 총 시간"이다.
+    unplaced_minutes: dict[uuid.UUID, int]
+    total_unplaced_minutes: int
+
+
+def _task_priority_key(task: Task, cycle_end_at: datetime):
+    planning_deadline_at = _compute_planning_deadline_at(task, cycle_end_at)
+    # 마감을 모르는 Task(None)는 항상 마감이 있는 Task보다 낮은 우선순위(뒤)로 정렬된다.
+    # 동순위 tie-break는 명세에 명시되어 있지 않아 created_at → id 순으로 결정적으로 고정한다.
+    return (
+        planning_deadline_at is None,
+        planning_deadline_at or _FAR_FUTURE,
+        task.created_at,
+        task.id,
+    )
+
+
+def schedule_plan_blocks(
+    db: Session,
+    *,
+    user_id: uuid.UUID,
+    plan_cycle_id: uuid.UUID,
+    now: datetime,
+) -> ScheduleResult:
+    """최초 계획 생성과 재계획에서 공통으로 사용하는 PlanBlock 자동 배치 서비스.
+
+    호출자(NEW_CYCLE/ACTIVE_CYCLE 실행, CheckIn Worker)가 이미 열어 둔 외부 트랜잭션
+    안에서 호출되어야 한다. 이 함수는 db.begin()이나 commit을 절대 호출하지 않으며
+    add/delete/flush만 수행한다. 실패 시 rollback 여부는 호출자의 트랜잭션 책임이다.
+
+    재계획 보호 규칙: 과거 COMPLETED/NOT_DONE과 현재 분기 CHECKED는 건드리지 않는다.
+    현재 분기의 미체크 PLANNED와 미래 PLANNED만 먼저 삭제하고 flush한 뒤, 남은 행(보호된
+    CHECKED 등)만 반영된 상태에서 용량을 계산한다. 현재 분기에 특정 Task의 CHECKED
+    PlanBlock이 남아 있으면 그 Task는 같은 분기에 새로 배치하지 않고, 남은 필요 시간은
+    다음 분기부터 배치한다.
+    """
+    cycle = get_owned_planning_cycle(db, plan_cycle_id, user_id)
+
+    current_plan_date = resolve_plan_date(now)
+    current_period = resolve_period(now)
+
+    # 1. 재계획 대상(현재 분기 미체크 PLANNED + 미래 PLANNED)을 먼저 삭제하고 flush한다.
+    candidate_removable = (
+        db.execute(
+            select(PlanBlock).where(
+                PlanBlock.user_id == user_id,
+                PlanBlock.plan_cycle_id == plan_cycle_id,
+                PlanBlock.status == PlanBlockStatus.PLANNED,
+                PlanBlock.plan_date >= current_plan_date,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    current_rank = _PERIOD_ORDER_LIST.index(current_period)
+    removable_blocks = [
+        block
+        for block in candidate_removable
+        if (block.plan_date, _PERIOD_ORDER_LIST.index(block.period)) >= (current_plan_date, current_rank)
+    ]
+    for block in removable_blocks:
+        db.delete(block)
+    db.flush()
+
+    # 2. 배치 대상 Task 조회 및 우선순위 정렬
+    tasks = (
+        db.execute(
+            select(Task).where(
+                Task.user_id == user_id,
+                Task.plan_cycle_id == plan_cycle_id,
+                Task.status == TaskStatus.ACTIVE,
+                Task.remaining_minutes > 0,
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    cycle_end_at = _compute_cycle_end_at(cycle)
+
+    remaining_needs: dict[uuid.UUID, int] = {}
+    has_current_checked: dict[uuid.UUID, bool] = {}
+    for task in tasks:
+        # (task_id, plan_date, period)는 UNIQUE 제약이므로 최대 1건만 존재한다.
+        current_checked_blocks = (
+            db.execute(
+                select(PlanBlock).where(
+                    PlanBlock.task_id == task.id,
+                    PlanBlock.plan_cycle_id == plan_cycle_id,
+                    PlanBlock.plan_date == current_plan_date,
+                    PlanBlock.period == current_period,
+                    PlanBlock.status == PlanBlockStatus.CHECKED,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        unfinalized_checked_minutes = sum(block.allocated_minutes for block in current_checked_blocks)
+        remaining_needs[task.id] = max(0, task.remaining_minutes - unfinalized_checked_minutes)
+        has_current_checked[task.id] = unfinalized_checked_minutes > 0
+
+    ordered_tasks = sorted(tasks, key=lambda task: _task_priority_key(task, cycle_end_at))
+
+    # 3. 현재 분기부터 cycle 종료까지 시간순으로 순회하며 그리디 배치
+    next_display_order: dict[tuple[date, PlanPeriod], int] = {}
+
+    def _reserve_display_order(plan_date: date, period: PlanPeriod) -> int:
+        key = (plan_date, period)
+        if key not in next_display_order:
+            existing_blocks = (
+                db.execute(
+                    select(PlanBlock).where(
+                        PlanBlock.plan_cycle_id == plan_cycle_id,
+                        PlanBlock.plan_date == plan_date,
+                        PlanBlock.period == period,
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            existing_orders = [block.display_order for block in existing_blocks]
+            next_display_order[key] = 0 if not existing_orders else max(existing_orders) + 1
+        order = next_display_order[key]
+        next_display_order[key] += 1
+        return order
+
+    created_blocks: list[PlanBlock] = []
+
+    for plan_date, period in _iter_periods_from(current_plan_date, current_period, cycle.end_date):
+        is_current = plan_date == current_plan_date and period == current_period
+
+        checked_minutes = 0
+        if is_current:
+            period_checked_blocks = (
+                db.execute(
+                    select(PlanBlock).where(
+                        PlanBlock.plan_cycle_id == plan_cycle_id,
+                        PlanBlock.plan_date == plan_date,
+                        PlanBlock.period == period,
+                        PlanBlock.status == PlanBlockStatus.CHECKED,
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            checked_minutes = sum(block.allocated_minutes for block in period_checked_blocks)
+
+        available = compute_period_capacity(
+            db,
+            user_id=user_id,
+            plan_date=plan_date,
+            period=period,
+            is_current_period=is_current,
+            now=now,
+            checked_minutes=checked_minutes,
+        )
+        if available < 1:
+            continue
+
+        for task in ordered_tasks:
+            if available < 1:
+                break
+            need = remaining_needs.get(task.id, 0)
+            if need <= 0:
+                continue
+            if is_current and has_current_checked.get(task.id):
+                # 현재 분기에 이미 이 Task의 CHECKED 블록이 있다 — 같은 분기에 중복 배치하지
+                # 않고, 남은 필요 시간은 다음 분기부터 배치한다.
+                continue
+
+            allocate = min(need, available)
+
+            new_block = PlanBlock(
+                id=uuid.uuid4(),
+                user_id=user_id,
+                plan_cycle_id=plan_cycle_id,
+                task_id=task.id,
+                plan_date=plan_date,
+                period=period,
+                allocated_minutes=allocate,
+                allocated_amount_text=None,
+                display_title=_build_fallback_display_title(task),
+                display_order=_reserve_display_order(plan_date, period),
+                status=PlanBlockStatus.PLANNED,
+                rescheduled_from_block_id=None,
+            )
+            db.add(new_block)
+            created_blocks.append(new_block)
+
+            remaining_needs[task.id] = need - allocate
+            available -= allocate
+
+    db.flush()
+
+    unplaced_minutes = {task_id: need for task_id, need in remaining_needs.items() if need > 0}
+    total_unplaced_minutes = sum(unplaced_minutes.values())
+
+    return ScheduleResult(
+        created_blocks=created_blocks,
+        unplaced_minutes=unplaced_minutes,
+        total_unplaced_minutes=total_unplaced_minutes,
+    )
