@@ -1,15 +1,14 @@
 import uuid
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
 from app.core.security import AuthenticatedUser, get_current_user
-from app.db.external import auth_users
 from app.db.session import get_db
 from app.models.user_profile import UserProfile
 from app.schemas.profile import OnboardingRequest, ProfileOut, ProfileResponse
+from app.services import profile_service
 
 router = APIRouter()
 
@@ -41,9 +40,7 @@ def update_onboarding(
     with db.begin():
         profile = upsert_onboarding_profile(db, current_user.id, nickname)
 
-        email = db.execute(
-            select(auth_users.c.email).where(auth_users.c.id == current_user.id)
-        ).scalar_one_or_none()
+        email = profile_service.get_user_email(db, current_user.id)
 
         if email is None:
             # FK(user_profiles.id -> auth.users.id ON DELETE RESTRICT)가 행 존재를 보장하므로
