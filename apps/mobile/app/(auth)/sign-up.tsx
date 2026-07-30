@@ -1,7 +1,5 @@
-import { RoutePlaceholder } from '@/src/components/common/route-placeholder';
+import { SignUpScreen } from '@/src/features/auth/screens/sign-up-screen';
 
-export default function SignUpScreen() {
-  return (
-    <RoutePlaceholder title="회원가입" description="회원가입 폼과 약관 동의는 후속 인증 Issue에서 구현합니다." />
-  );
+export default function SignUpRoute() {
+  return <SignUpScreen />;
 }

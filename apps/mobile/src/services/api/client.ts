@@ -1,3 +1,4 @@
+import { getSupabaseClient } from '@/src/services/supabase/client';
 import { env } from '@/src/utils/env';
 import type { ApiErrorBody, ApiFailure, ApiSuccess } from '@/src/types/api';
 
@@ -35,14 +36,30 @@ export class ApiClientError extends Error {
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const url = `${env.apiBaseUrl}${path}`;
 
+  const headers = new Headers(options.headers);
+  if (!headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  if (!headers.has('Authorization')) {
+    // 세션 조회 자체가 실패해도(예: 토큰 갱신 네트워크 오류) 요청을 막지 않고 인증 헤더 없이 계속 진행한다.
+    // 실제 인증 필요 여부는 서버의 401 AUTH_REQUIRED 응답이 판단한다.
+    try {
+      const {
+        data: { session },
+      } = await getSupabaseClient().auth.getSession();
+      if (session?.access_token) {
+        headers.set('Authorization', `Bearer ${session.access_token}`);
+      }
+    } catch {
+      // 세션 조회 실패는 무시한다. token이나 오류 내용을 로그로 남기지 않는다.
+    }
+  }
+
   let response: Response;
   try {
     response = await fetch(url, {
       method: options.method ?? 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
+      headers,
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
     });
   } catch {
