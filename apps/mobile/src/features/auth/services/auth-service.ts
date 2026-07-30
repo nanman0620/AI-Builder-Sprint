@@ -19,6 +19,11 @@ export type KakaoSignInResult =
   | { status: 'cancelled' }
   | { status: 'error' };
 
+// bootstrap의 AUTH_REQUIRED 처리(로그인 Route 이동 전 session 정리)가 사용한다.
+export async function signOut(): Promise<void> {
+  await getSupabaseClient().auth.signOut();
+}
+
 export async function signInWithEmail(email: string, password: string): Promise<SignInResult> {
   const { data, error } = await getSupabaseClient().auth.signInWithPassword({ email, password });
   if (error) {
