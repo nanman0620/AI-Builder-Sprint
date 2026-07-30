@@ -1,60 +1,91 @@
-# 이음(E-um) MVP
+# AI Builder Sprint 2026
 
-이음은 사용자의 할 일과 고정 일정을 AI가 구조화해 7일 계획으로 배치하고, 오전·오후·저녁 분기마다 자동 정산·재계획하는 해커톤 MVP다.
+> 총 168시간, AI와 함께 만드는 도전
 
-이 폴더는 팀 저장소 루트에 병합할 최종 개발 기준 묶음이다. 적용 시점의 앱·서버 구현 현황은 대상 저장소에서 직접 확인하며, 이미 존재하는 코드는 보존하고 문서와 필요한 자산만 병합한다.
+## 대회 소개
 
-## 기준 문서
+**AI Builder Sprint 2026**은 부산대학교 **APPTIVE**가 주최하고, **Upstage**, 부산대학교 **Anchor 사업단** 및 부산대학교 **AI융합교육원**이 후원하는 해커톤입니다. 참가자들은 자유로운 기술 스택을 바탕으로 실제로 동작하는 서비스를 직접 코드로 구현합니다.
 
-| 영역 | 최종 기준 |
+| 항목 | 내용 |
 | --- | --- |
-| 화면 존재·상태·문구·이동·오류 동작 | `docs/design/이음_MVP_최종_화면_흐름.pdf` |
-| 화면의 색상·간격·배치·컴포넌트 외형 | `docs/design/UI_REFERENCE.md`와 `docs/design/ui/screens/` |
-| HTTP·DTO·상태 코드·오류 코드 | `docs/api/이음_MVP_최종_API_명세서.pdf` |
-| DB·Enum·제약·트랜잭션·Worker | `docs/database/이음_MVP_최종_DB_구조.pdf` |
-| 테이블 관계 개요 | `docs/database/ERD.png` |
-| 에이전트용 구현 요약 | `docs/ai/IMPLEMENTATION_CONTEXT.md` |
+| 주제 | AI를 통해 인간다움을 더욱 잘 드러낼 수 있는 서비스 개발 |
+| 팀 구성 | 2~4인 1팀 |
+| 개발 방식 | 코드 기반 앱 개발 필수 (노코드/로우코드 단독 사용 불가) |
 
-화면 캡처는 시각 참고다. 캡처와 최종 화면 흐름이 다르면 `UI_REFERENCE.md`에 기록된 보정 규칙을 적용하며, 캡처의 예시 날짜·닉네임·할 일·점수는 코드에 고정하지 않는다.
+### 진행 흐름
 
-## 기술 스택
+1. **팀 단위 참가 신청** — 팀원 정보, 프로젝트 아이디어, 활용 예정 AI 기술·API 제출
+2. **참가팀 선발** (20~50팀) — 아이디어 참신성·실현 가능성·AI 활용 계획 기반 서류 심사
+3. **예선 개발 기간** (7.27 ~ 8.3, 약 1주일) — API 크레딧 발급, 아이디어 구체화 및 개발
+4. **결과물 제출 및 1차 심사** — 데모 영상/배포 링크, 코드 저장소, 발표 자료, AI 활용 증빙 제출
+5. **본선 발표 및 질의응답** (8.7) — 팀당 7분 발표 + 5분 Q&A, 심사 후 수상팀 확정
 
-- Mobile: React Native + Expo + TypeScript
-- Server: FastAPI + 서버 Worker
-- Auth: Supabase Auth
-- DB: Supabase PostgreSQL 15+
-- AI: Upstage SOLAR
-- Timezone: `Asia/Seoul`
+### 기술 스택 및 규칙
 
-## 목표 구조
+- 사용 API·모델은 자유이며, **Upstage API**(Solar LLM, Document Parse, Information Extract) 활용 시 심사 가점
+- Claude, GPT, Gemini 등 타사 모델 병행 사용 가능 (제약 없음)
+- 프레임워크/언어 자유 (Python, JavaScript, React, Flutter 등)
+- 결과물은 데모 가능한 동작하는 앱 (웹앱, 모바일앱, CLI 도구 등 형태 무관)
+- 코딩 에이전트(Claude Code, Codex 등) 활용 시 `.claude/`, `AGENTS.md` 등 관련 설정·지침 파일을 저장소에 포함해야 심사에 반영됩니다
 
-```text
-.
-├── AGENTS.md
-├── CLAUDE.md
-├── README.md
-├── apps/
-│   ├── mobile/
-│   │   └── assets/brand/
-│   └── server/
-├── docs/
-│   ├── api/
-│   ├── database/
-│   ├── design/
-│   │   ├── UI_REFERENCE.md
-│   │   └── ui/
-│   └── ai/
-└── .github/
+### 심사 기준
+
+| 기준 | 배점 |
+| --- | --- |
+| 창의성 | 20점 |
+| AI 활용도 | 20점 |
+| 완성도 | 20점 |
+| 실용성 | 20점 |
+| 발표력 (본선) | 20점 |
+| Upstage API 활용 가점 | +5점 |
+| 지역사회 기여도 가점 | +5점 |
+
+### 시상 내역
+
+- 대상 1팀: 100만원 + 상품
+- 최우수상 1팀: 50만원 + 상품
+- 우수상 1팀: 상품
+- 본선 참가 10팀: Upstage 굿즈 + 참가 인증서
+
+## Git Fork 하는 방법
+
+참가팀은 이 저장소를 팀 대표의 GitHub 계정으로 **Fork**한 뒤, 해당 Fork 저장소에서 프로젝트를 개발하고 최종 결과물을 제출합니다.
+
+### 1. 저장소 Fork하기
+
+1. [AI-Builder-Sprint 저장소](https://github.com/ApptiveDev/AI-Builder-Sprint)에 접속합니다.
+2. 우측 상단의 **Fork** 버튼을 클릭합니다.
+  <img width="1888" height="1131" alt="스크린샷 2026-07-27 오전 12 31 16" src="https://github.com/user-attachments/assets/2f0f7f80-6c92-4ba5-87c5-89ed6107eeab" />
+
+3. 본인(또는 팀 대표) GitHub 계정으로 저장소가 복사됩니다. (`https://github.com/<내-계정>/AI-Builder-Sprint`)
+
+### 2. Fork한 저장소 로컬로 클론하기
+
+```bash
+git clone https://github.com/<내-계정>/AI-Builder-Sprint.git
+cd AI-Builder-Sprint
 ```
 
-## 개발 시작
+### 3. 개발 진행 및 커밋
 
-1. 이 묶음을 공식 upstream이 아닌 팀 포크 저장소 루트에 반영한다.
-2. `apps/mobile`에 Expo 구조가 이미 있으면 폴더 전체를 덮어쓰지 않는다. 기존 코드를 보존한 채 이 묶음의 문서와 `apps/mobile/assets/brand/` 자산만 병합한다.
-3. 대상 저장소의 실제 구조·manifest·실행 명령을 확인하고, README의 구조와 명령을 같은 PR에서 맞춘다.
-4. 첫 작업은 작은 Issue로 나눈다. 서버가 아직 없다면 FastAPI 기본 구조와 `GET /api/v1/health`부터 시작한다.
-5. 이후 DB 모델·migration, 인증·프로필, SOLAR 수집, 실행 Worker, 홈·정산, 캘린더 순으로 구현한다.
-6. UI 작업 전 `docs/design/UI_REFERENCE.md`에서 해당 상태·보정 규칙·점수별 마스코트 자산을 확인한다.
-7. 존재하지 않는 실행 명령이나 `.env` 값을 추측해 문서화하지 않는다.
+```bash
+git checkout -b develop
+# 코드 작성 및 수정
+git add .
+git commit -m "feat: 프로젝트 초기 구현"
+git push origin develop
+```
 
-사용자와 에이전트의 역할 구분은 `docs/ai/HUMAN_ACTIONS.md`에 짧게 정리되어 있다.
+포크된 저장소 내에서 개발을 진행해주시면 됩니다.
+
+### 4. 결과물 제출
+
+- **팀별로 Fork한 본인 저장소 URL을 제출 양식에 기재합니다.**
+- 제출 마감 전까지 코드, 데모 영상/배포 링크, 발표 자료를 함께 준비해 제출해주세요.
+- 코딩 에이전트를 활용한 경우 `.claude/`, `AGENTS.md` 등 설정 파일도 반드시 저장소에 포함해주세요.
+
+
+## 문의
+
+- 대회 관련 문의: 해커톤 문의 오픈채팅방
+- 주최: 부산대학교 APPTIVE, 정보컴퓨터공학부 동아리연합회 / 후원: Upstage, 부산대 Anchor 사업단, 부산대 AI융합교육원
