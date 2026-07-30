@@ -4,10 +4,31 @@ import React from 'react';
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { colors } from '@/src/constants/tokens';
+import {
+  type ExitDestination,
+  PlanExitGuardProvider,
+  usePlanExitGuard,
+} from '@/src/features/plan-management/contexts/plan-exit-guard-context';
 
-export default function TabLayout() {
+function isExitDestination(routeName: string): routeName is Exclude<ExitDestination, 'back'> {
+  return routeName === 'calendar' || routeName === 'home' || routeName === 'settings';
+}
+
+function GuardedTabs() {
+  const { isGuardActive, requestExit } = usePlanExitGuard();
+
   return (
     <Tabs
+      screenListeners={({ navigation, route }) => ({
+        tabPress: (event) => {
+          if (!isGuardActive || !isExitDestination(route.name)) {
+            return;
+          }
+
+          event.preventDefault();
+          requestExit(route.name, () => navigation.navigate(route.name));
+        },
+      })}
       screenOptions={{
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textSecondary,
@@ -43,5 +64,13 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
+  );
+}
+
+export default function TabLayout() {
+  return (
+    <PlanExitGuardProvider>
+      <GuardedTabs />
+    </PlanExitGuardProvider>
   );
 }

@@ -66,6 +66,10 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     throw new ApiClientError(NETWORK_ERROR);
   }
 
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
   let payload: unknown;
   try {
     payload = await response.json();

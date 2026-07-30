@@ -1,6 +1,6 @@
 import { apiRequest } from '@/src/services/api/client';
 
-import type { PlanManagementState, RequestPurpose } from '../types';
+import type { DecisionOption, PlanManagementState, RequestPurpose } from '../types';
 
 type CreateSolarRequestBody = {
   purpose: RequestPurpose;
@@ -31,5 +31,32 @@ export function sendSolarMessage(
   return apiRequest<PlanManagementState>(`/solar/requests/${requestId}/messages`, {
     method: 'POST',
     body,
+  });
+}
+
+type SubmitSolarDecisionBody = {
+  clientEventId: string;
+  decision: DecisionOption['value'];
+};
+
+export function submitSolarDecision(
+  requestId: string,
+  body: SubmitSolarDecisionBody
+): Promise<PlanManagementState> {
+  return apiRequest<PlanManagementState>(`/solar/requests/${requestId}/decisions`, {
+    method: 'POST',
+    body,
+  });
+}
+
+export function reopenSolarRequest(requestId: string): Promise<PlanManagementState> {
+  return apiRequest<PlanManagementState>(`/solar/requests/${requestId}/reopen`, {
+    method: 'POST',
+  });
+}
+
+export function deleteSolarRequest(requestId: string): Promise<void> {
+  return apiRequest<void>(`/solar/requests/${requestId}`, {
+    method: 'DELETE',
   });
 }
