@@ -21,7 +21,7 @@ import type { CheckInResult } from '../types';
 
 export function HomeScreen() {
   const router = useRouter();
-  const { data: bootstrapData } = useBootstrap();
+  const { data: bootstrapData, status: bootstrapStatus } = useBootstrap();
   const {
     data,
     isLoading,
@@ -51,6 +51,12 @@ export function HomeScreen() {
   }
 
   if (!data || !visibleState) {
+    return <LoadingView />;
+  }
+
+  // 직접 Route 새로고침에서는 홈 조회가 bootstrap 세션 복원보다 먼저 끝날 수 있다.
+  // 이 구간에는 fallback을 확정하지 않고, 최신 profile이 context에 반영될 때까지 로딩 화면을 유지한다.
+  if (bootstrapStatus === 'idle' || bootstrapStatus === 'loading') {
     return <LoadingView />;
   }
 

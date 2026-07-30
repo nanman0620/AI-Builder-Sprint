@@ -105,6 +105,13 @@ export function BootstrapProvider({ children }: { children: ReactNode }) {
     return promise;
   }, []);
 
+  // 웹에서 /home 같은 직접 Route를 새로고침하면 app/index.tsx가 mount되지 않으므로,
+  // Provider가 세션 복원 후 bootstrap을 최초 한 번 동기화한다. index·포그라운드 sync와 겹쳐도
+  // inFlightRef가 같은 Promise를 반환해 GET /bootstrap 중복 요청을 만들지 않는다.
+  useEffect(() => {
+    void sync();
+  }, [sync]);
+
   const value: BootstrapContextValue = { status, data, error, sync };
 
   return <BootstrapContext.Provider value={value}>{children}</BootstrapContext.Provider>;
