@@ -4,8 +4,11 @@ from enum import Enum
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.errors import ApiError
 from app.models.enums import SolarRequestStatus
 from app.models.solar_request import SolarRequest
+
+CODE_REQUEST_NOT_FOUND = "REQUEST_NOT_FOUND"
 
 _RESTORABLE_IN_PROGRESS_STATUSES = (
     SolarRequestStatus.COLLECTING,
@@ -36,6 +39,16 @@ def get_current_solar_request(db: Session, user_id: uuid.UUID) -> SolarRequest |
         ),
     )
     return db.execute(stmt).scalar_one_or_none()
+
+
+def get_owned_solar_request(db: Session, request_id: uuid.UUID, user_id: uuid.UUID) -> SolarRequest:
+    """소유권을 확인한 SolarRequest 1건을 조회한다. 상태·확인 여부와 무관하게(과거 완료 포함)
+    본인 소유의 요청이면 조회할 수 있다. 없거나 타인 소유면 404 REQUEST_NOT_FOUND다."""
+    stmt = select(SolarRequest).where(SolarRequest.id == request_id, SolarRequest.user_id == user_id)
+    request = db.execute(stmt).scalar_one_or_none()
+    if request is None:
+        raise ApiError(404, CODE_REQUEST_NOT_FOUND, "요청을 찾을 수 없어요.")
+    return request
 
 
 class PlanManagementScreenMode(str, Enum):
