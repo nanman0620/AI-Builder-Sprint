@@ -1,5 +1,14 @@
 import { useState } from 'react';
-import { StyleSheet, Text, TextInput, TouchableOpacity, View, type TextInputProps } from 'react-native';
+import {
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+  type StyleProp,
+  type TextInputProps,
+  type ViewStyle,
+} from 'react-native';
 
 import { colors, spacing } from '@/src/constants/tokens';
 import { AuthMaterialIcon } from '@/src/features/auth/components/auth-material-icon';
@@ -8,6 +17,7 @@ type AuthTextInputProps = TextInputProps & {
   label?: string;
   error?: string | null;
   secureToggle?: boolean;
+  containerStyle?: StyleProp<ViewStyle>;
 };
 
 // Figma UI-002/003/004 캡처 기준 조밀한 치수(390dp 기준 뷰포트 대비 실측 근사값).
@@ -22,6 +32,7 @@ export function AuthTextInput({
   error,
   secureToggle = false,
   secureTextEntry,
+  containerStyle,
   style,
   ...rest
 }: AuthTextInputProps) {
@@ -29,7 +40,7 @@ export function AuthTextInput({
   const resolvedSecureTextEntry = secureToggle ? !isVisible : secureTextEntry;
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, containerStyle]}>
       {label ? <Text style={styles.label}>{label}</Text> : null}
       <View style={[styles.inputRow, error ? styles.inputRowError : null]}>
         <TextInput
@@ -76,7 +87,7 @@ const styles = StyleSheet.create({
   },
   inputRowError: {
     borderColor: colors.error,
-    backgroundColor: colors.primarySoft,
+    backgroundColor: 'rgba(255, 0, 0, 0.07)',
   },
   input: {
     flex: 1,

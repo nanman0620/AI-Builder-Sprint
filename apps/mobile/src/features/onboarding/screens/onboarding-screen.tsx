@@ -1,7 +1,7 @@
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
 
 import { colors } from '@/src/constants/tokens';
 import { putOnboarding } from '@/src/features/onboarding/api/onboarding';
@@ -93,7 +93,7 @@ export function OnboardingScreen() {
 }
 
 const CONTENT_MAX_WIDTH = 400;
-const MASCOT_WIDTH = 90;
+const MASCOT_WIDTH = 225;
 const MASCOT_HEIGHT = Math.round((MASCOT_WIDTH * 534) / 711);
 
 const styles = StyleSheet.create({
@@ -125,7 +125,7 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   title: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '700',
     color: colors.text,
     textAlign: 'center',

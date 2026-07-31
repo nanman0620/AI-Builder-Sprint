@@ -1,11 +1,12 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { colors } from '@/src/constants/tokens';
 import { AppSyncProvider, useAppSync } from '@/src/features/app-sync/app-sync-context';
 import { BootstrapProvider, useBootstrap } from '@/src/features/bootstrap/bootstrap-context';
 import { resolveAppRoute } from '@/src/features/bootstrap/route';
@@ -68,9 +69,20 @@ function useForegroundBootstrapSync() {
 function RootNavigator() {
   useForegroundBootstrapSync();
   const colorScheme = useColorScheme();
+  const navigationTheme = useMemo(() => {
+    const baseTheme = colorScheme === 'dark' ? DarkTheme : DefaultTheme;
+
+    return {
+      ...baseTheme,
+      colors: {
+        ...baseTheme.colors,
+        background: colors.background,
+      },
+    };
+  }, [colorScheme]);
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+    <ThemeProvider value={navigationTheme}>
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" />
         <Stack.Screen name="(auth)" />
