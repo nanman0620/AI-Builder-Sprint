@@ -19,6 +19,78 @@ export type SolarRequestStatus =
   | 'FAILED';
 
 export type RequestPurpose = 'NEW_CYCLE' | 'ACTIVE_CYCLE';
+export type ExecutionStatus = 'EXECUTING' | 'COMPLETED' | 'FAILED';
+
+export type ExecutionStartResponse = {
+  requestId: string;
+  status: 'EXECUTING';
+  screenMode: 'EXECUTING';
+  executionStartedAt: string;
+  executionAttemptCount: number;
+};
+
+export type ExecutionCompletedResult = {
+  createdTaskCount: number;
+  updatedTaskCount: number;
+  cancelledTaskCount: number;
+  createdFixedScheduleCount: number;
+  updatedFixedScheduleCount: number;
+  deletedFixedScheduleCount: number;
+  taskCount: number;
+  fixedScheduleCount: number;
+};
+
+export type ExecutionFailureError = {
+  code: 'PLAN_EXECUTION_FAILED';
+  message: string;
+  retryable: boolean;
+};
+
+// GET /plan-management/state의 request.execution 중첩 구조. request.status와
+// 최상위 screenMode는 이미 바깥 필드에 있으므로 GET /execution DTO와 구분한다.
+export type ExecutionSnapshot = {
+  executionStartedAt: string | null;
+  executionAttemptCount: number;
+  executedAt: string | null;
+  executionResult: ExecutionCompletedResult | null;
+  error: ExecutionFailureError | null;
+};
+
+type ExecutionStatusBase = {
+  requestId: string;
+  purpose: RequestPurpose;
+  executionStartedAt: string;
+  executionAttemptCount: number;
+};
+
+export type ExecutionStatusResponse =
+  | (ExecutionStatusBase & {
+      status: 'EXECUTING';
+      screenMode: 'EXECUTING';
+      executedAt: null;
+      executionResult: null;
+      error: null;
+    })
+  | (ExecutionStatusBase & {
+      status: 'COMPLETED';
+      screenMode: 'EXECUTION_SUCCESS';
+      executedAt: string;
+      executionResult: ExecutionCompletedResult;
+      error: null;
+    })
+  | (ExecutionStatusBase & {
+      status: 'FAILED';
+      screenMode: 'EXECUTION_FAILED';
+      executedAt: null;
+      executionResult: null;
+      error: ExecutionFailureError;
+    });
+
+export type AcknowledgeExecutionResultResponse = {
+  requestId: string;
+  resultAcknowledgedAt: string;
+  nextPlanManagementScreenMode: 'ACTIVE_CYCLE_ENTRY';
+};
 
 export type MessageRole = 'USER' | 'ASSISTANT';
 export type MessageKind = 'TEXT' | 'QUESTION' | 'ERROR' | 'DECISION';
@@ -128,8 +200,7 @@ export type SolarRequest = {
   pendingItemId: string | null;
   // CHANGE_CONFIRMATION 전용. 그 외 상태에서는 null.
   decisionPrompt: DecisionPrompt | null;
-  // FE-03 범위 밖(FINAL_REVIEW/EXECUTING) 전용 필드. 명세에서 내부 구조가 아직 확정되지
-  // 않아 unknown으로만 선언하고 렌더링하지 않는다.
+  // FINAL_REVIEW 전용 요약은 최종 API 명세가 내부 구조를 정의하지 않는다.
   reviewSummary: unknown;
-  execution: unknown;
+  execution: ExecutionSnapshot | null;
 };

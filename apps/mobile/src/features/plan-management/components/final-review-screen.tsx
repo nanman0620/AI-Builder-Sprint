@@ -12,6 +12,7 @@ type FinalReviewScreenProps = {
   actionError: string | null;
   onReload: () => void;
   onReopen: () => void;
+  onExecute: () => void;
 };
 
 export function FinalReviewScreen({
@@ -20,6 +21,7 @@ export function FinalReviewScreen({
   actionError,
   onReload,
   onReopen,
+  onExecute,
 }: FinalReviewScreenProps) {
   const sortedItems = request ? [...request.requestItems].sort((a, b) => a.itemOrder - b.itemOrder) : [];
 
@@ -44,10 +46,10 @@ export function FinalReviewScreen({
           <Text style={styles.secondaryButtonText}>수정</Text>
         </Pressable>
         <Pressable
-          style={[styles.button, styles.primaryButton, styles.executeDisabled]}
-          disabled
-          accessibilityHint="계획 등록은 다음 구현 범위에서 제공됩니다.">
-          <Text style={styles.primaryButtonText}>모두 등록</Text>
+          style={[styles.button, styles.primaryButton, isSubmitting && styles.disabled]}
+          disabled={isSubmitting}
+          onPress={onExecute}>
+          <Text style={styles.primaryButtonText}>{isSubmitting ? '등록 중...' : '모두 등록'}</Text>
         </Pressable>
       </View>
     </View>
@@ -105,8 +107,5 @@ const styles = StyleSheet.create({
   },
   disabled: {
     opacity: 0.5,
-  },
-  executeDisabled: {
-    opacity: 0.55,
   },
 });

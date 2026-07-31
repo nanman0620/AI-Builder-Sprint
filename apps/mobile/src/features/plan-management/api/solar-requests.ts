@@ -1,6 +1,13 @@
 import { apiRequest } from '@/src/services/api/client';
 
-import type { DecisionOption, PlanManagementState, RequestPurpose } from '../types';
+import type {
+  AcknowledgeExecutionResultResponse,
+  DecisionOption,
+  ExecutionStartResponse,
+  ExecutionStatusResponse,
+  PlanManagementState,
+  RequestPurpose,
+} from '../types';
 
 type CreateSolarRequestBody = {
   purpose: RequestPurpose;
@@ -53,6 +60,31 @@ export function reopenSolarRequest(requestId: string): Promise<PlanManagementSta
   return apiRequest<PlanManagementState>(`/solar/requests/${requestId}/reopen`, {
     method: 'POST',
   });
+}
+
+export function executeSolarRequest(requestId: string): Promise<ExecutionStartResponse> {
+  return apiRequest<ExecutionStartResponse>(`/solar/requests/${requestId}/execute`, {
+    method: 'POST',
+  });
+}
+
+export function getSolarRequestExecution(requestId: string): Promise<ExecutionStatusResponse> {
+  return apiRequest<ExecutionStatusResponse>(`/solar/requests/${requestId}/execution`);
+}
+
+export function retrySolarRequest(requestId: string): Promise<ExecutionStartResponse> {
+  return apiRequest<ExecutionStartResponse>(`/solar/requests/${requestId}/retry`, {
+    method: 'POST',
+  });
+}
+
+export function acknowledgeSolarRequestResult(
+  requestId: string
+): Promise<AcknowledgeExecutionResultResponse> {
+  return apiRequest<AcknowledgeExecutionResultResponse>(
+    `/solar/requests/${requestId}/acknowledge-result`,
+    { method: 'POST' }
+  );
 }
 
 export function deleteSolarRequest(requestId: string): Promise<void> {
