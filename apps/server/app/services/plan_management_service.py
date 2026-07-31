@@ -437,11 +437,10 @@ def _build_execution(request: SolarRequest) -> Execution | None:
 
     error = None
     if request.status == SolarRequestStatus.FAILED:
-        # retryable을 저장하는 컬럼이 없다 — FAILED는 상태 전이표(FAILED --retry 검증 성공--> EXECUTING)
-        # 상 항상 재시도 가능한 MVP 상태 모델이므로 True로 고정한다(추측 문구가 아니라 상태 머신
-        # 규칙에서 도출한 상수).
         error = ExecutionError(
-            code=request.error_code or "", message=request.error_message or "", retryable=True
+            code=request.error_code or "",
+            message=request.error_message or "",
+            retryable=solar_request_service.is_execution_error_retryable(request.error_code),
         )
 
     return Execution(

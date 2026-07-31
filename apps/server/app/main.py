@@ -16,13 +16,15 @@ from app.core.config import get_solar_api_key
 from app.api.v1.tasks import router as tasks_router
 from app.core.errors import register_exception_handlers
 from app.workers.check_in_worker import check_in_lifespan
+from app.workers.solar_execution_worker import get_solar_execution_dispatcher, solar_execution_lifespan
 
 
 @asynccontextmanager
 async def _app_lifespan(app: FastAPI):
     get_solar_api_key()
     async with check_in_lifespan(app):
-        yield
+        async with solar_execution_lifespan(app, get_solar_execution_dispatcher()):
+            yield
 
 
 app = FastAPI(title="이음(E-um) MVP API", lifespan=_app_lifespan)
