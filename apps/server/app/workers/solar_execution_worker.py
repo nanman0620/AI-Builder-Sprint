@@ -17,8 +17,9 @@ from sqlalchemy.orm import Session
 
 from app.core.clock import get_current_moment
 from app.db.session import get_engine, get_session_local
-from app.models.enums import SolarRequestStatus
+from app.models.enums import SolarRequestPurpose, SolarRequestStatus
 from app.models.solar_request import SolarRequest
+from app.services import new_cycle_execution_service
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,45 @@ class NotConfiguredExecutor:
     """
 
     def execute(self, db: Session, request: SolarRequest) -> None:
+        raise ExecutionDomainError(
+            "PLAN_EXECUTION_FAILED", "실행 기능이 아직 준비되지 않았어요. 잠시 후 다시 시도해 주세요."
+        )
+
+
+class DefaultExecutor:
+    """purpose에 따라 실제 도메인 실행 서비스로 위임하는 production Executor. NEW_CYCLE만
+    실제 로직(new_cycle_execution_service.execute_new_cycle)에 연결되어 있다. ACTIVE_CYCLE은
+    이 Issue 범위 밖이라 NotConfiguredExecutor와 동일하게 항상 도메인 실패로 처리한다 —
+    EXECUTING에 무기한 방치하거나 가짜로 COMPLETED 처리하지 않는다.
+
+    NEW_CYCLE 분기는 execute_new_cycle이 이미 _execute_locked가 연 `with db.begin()` 블록
+    안에서 호출된다는 점을 이용해, 분류된 NewCycleExecutionError뿐 아니라 그 블록 안에서
+    발생하는 그 외 모든 예외(Exception 하위, 프로세스 종료 계열인 BaseException/
+    KeyboardInterrupt/SystemExit는 애초에 `except Exception`에 잡히지 않는다)도
+    ExecutionDomainError로 변환한다. rollback은 이미 그 with-block이 보장하므로 "실행
+    트랜잭션 안에서 발생한 예외"는 분류 여부와 무관하게 항상 별도 트랜잭션 FAILED 기록으로
+    이어져야 한다는 계약을 satisfy한다. 이 executor 호출 자체가 시작되기 전(session 생성,
+    requestId advisory lock 획득 등 _execute_locked/run_worker_for_request 계층)의 인프라
+    실패는 이 클래스가 관여하지 않는 별도 경계이며 기존 대로 EXECUTING을 유지한다.
+
+    사용자 응답에는 원본 예외 메시지나 내부 식별자를 노출하지 않는다 — 분류되지 않은 예외는
+    항상 고정된 안전 문구로 대체하고, 실제 원인은 로그의 traceback(exc_info, __cause__ 체인)
+    으로만 보존한다."""
+
+    def execute(self, db: Session, request: SolarRequest) -> None:
+        if request.purpose == SolarRequestPurpose.NEW_CYCLE:
+            try:
+                new_cycle_execution_service.execute_new_cycle(db, request)
+            except new_cycle_execution_service.NewCycleExecutionError as exc:
+                raise ExecutionDomainError(exc.code, exc.message) from exc
+            except Exception as exc:
+                logger.exception(
+                    "NEW_CYCLE 실행 트랜잭션 안에서 분류되지 않은 예외 발생 request_id=%s", request.id
+                )
+                raise ExecutionDomainError(
+                    "PLAN_EXECUTION_FAILED", "실행 중 문제가 발생했어요. 다시 시도해 주세요."
+                ) from exc
+            return
         raise ExecutionDomainError(
             "PLAN_EXECUTION_FAILED", "실행 기능이 아직 준비되지 않았어요. 잠시 후 다시 시도해 주세요."
         )
@@ -236,7 +276,7 @@ _dispatcher: SolarExecutionDispatcher | None = None
 def get_solar_execution_dispatcher() -> SolarExecutionDispatcher:
     global _dispatcher
     if _dispatcher is None:
-        _dispatcher = SolarExecutionDispatcher(session_factory=get_session_local())
+        _dispatcher = SolarExecutionDispatcher(session_factory=get_session_local(), executor=DefaultExecutor())
     return _dispatcher
 
 
