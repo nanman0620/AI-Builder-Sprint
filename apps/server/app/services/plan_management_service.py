@@ -38,10 +38,16 @@ _MISSING_FIELD_LABELS = {
     "title": "제목",
     "deadlineAt": "마감",
     "estimatedMinutes": "예상 시간",
+    "remainingMinutes": "남은 시간",
     "amount": "분량",
     "startAt": "시작",
     "endAt": "종료",
 }
+
+# Issue #50: UPDATE 카드에서 estimatedMinutes와 무관하게 remainingMinutes만 바뀔 수 있어
+# missing field로 새로 등장한다. 새 문구를 만들지 않고 estimatedMinutes의 기존 placeholder를
+# 그대로 재사용한다.
+_INPUT_PLACEHOLDERS["remainingMinutes"] = _INPUT_PLACEHOLDERS["estimatedMinutes"]
 
 _ACTION_LABELS = {
     SolarAction.CREATE: "추가",
@@ -90,7 +96,8 @@ _CHANGE_CONFIRMATION_DECISION_PROMPT = DecisionPrompt(
 
 @dataclass(frozen=True)
 class CurrentQuestion:
-    item_id: uuid.UUID
+    # Issue #50: 카드 없는 "대상 모호" 질문(unresolvedLine)은 아이템이 없어 itemId가 없다.
+    item_id: uuid.UUID | None
     field: str
     message: str
 
@@ -307,6 +314,30 @@ def _find_pending_item(
     return None
 
 
+def _find_unresolved_question_message(messages: Sequence[SolarMessage]) -> SolarMessage | None:
+    """Issue #50: 카드 없는 "대상 모호" 질문(unresolvedLine)이 아직 해소되지 않았는지 찾는다.
+
+    `metadata.unresolved=true`인 ASSISTANT/QUESTION 메시지 중 sequence_no가 가장 큰 것을 찾고,
+    그보다 sequence_no가 더 큰 메시지(USER 답변이든 더 최신 QUESTION이든)가 하나라도 있으면
+    이미 해소된 것으로 보고 사용하지 않는다. 이번 Issue는 한 turn만 만들어 이 조건이 실질적으로
+    항상 참이지만, 이후 `/messages`가 메시지를 추가하는 상황에서도 안전하도록 미리 구현한다.
+    """
+    unresolved_candidates = [
+        message
+        for message in messages
+        if message.role == SolarMessageRole.ASSISTANT
+        and message.kind == SolarMessageKind.QUESTION
+        and isinstance(message.message_metadata, dict)
+        and message.message_metadata.get("unresolved") is True
+    ]
+    if not unresolved_candidates:
+        return None
+    latest_unresolved = max(unresolved_candidates, key=lambda m: m.sequence_no)
+    if any(message.sequence_no > latest_unresolved.sequence_no for message in messages):
+        return None
+    return latest_unresolved
+
+
 def _find_question_metadata(
     messages: Sequence[SolarMessage], pending_item_id: uuid.UUID, field: str
 ) -> dict | None:
@@ -414,22 +445,31 @@ def _build_solar_request_detail(
     pending_item_id: uuid.UUID | None = None
 
     if request.status == SolarRequestStatus.COLLECTING:
-        pending_item = _find_pending_item(request, sorted_items)
-        if pending_item is not None:
-            pending_question = _parse_pending_question(pending_item.pending_question)
-            if pending_question is not None:
-                metadata = _find_question_metadata(
-                    sorted_messages, pending_item.id, pending_question.field
-                )
-                quick_replies, input_placeholder = _resolve_quick_replies_and_placeholder(
-                    metadata, pending_question.field
-                )
-                current_question = CurrentQuestion(
-                    item_id=pending_item.id,
-                    field=pending_question.field,
-                    message=pending_question.message,
-                )
-                pending_item_id = pending_item.id
+        # Issue #50: 카드 없는 "대상 모호" 질문이 아직 해소되지 않았으면 카드 기반 질문보다
+        # 항상 우선한다(저장 쪽도 둘 중 하나만 메시지를 만들므로 실제로는 상호 배타적이다).
+        unresolved_message = _find_unresolved_question_message(sorted_messages)
+        if unresolved_message is not None:
+            current_question = CurrentQuestion(
+                item_id=None, field="targetEntityId", message=unresolved_message.content
+            )
+            input_placeholder = _CHANGE_INPUT_PLACEHOLDER
+        else:
+            pending_item = _find_pending_item(request, sorted_items)
+            if pending_item is not None:
+                pending_question = _parse_pending_question(pending_item.pending_question)
+                if pending_question is not None:
+                    metadata = _find_question_metadata(
+                        sorted_messages, pending_item.id, pending_question.field
+                    )
+                    quick_replies, input_placeholder = _resolve_quick_replies_and_placeholder(
+                        metadata, pending_question.field
+                    )
+                    current_question = CurrentQuestion(
+                        item_id=pending_item.id,
+                        field=pending_question.field,
+                        message=pending_question.message,
+                    )
+                    pending_item_id = pending_item.id
     elif request.status == SolarRequestStatus.CHANGE_INPUT:
         input_placeholder = _CHANGE_INPUT_PLACEHOLDER
 

@@ -772,3 +772,166 @@ def test_get_solar_request_detail_state_completed_acknowledged_returns_execution
     state = svc.get_solar_request_detail_state(fake_db, USER_ID, REQUEST_ID)
 
     assert state.screen_mode == svc.PlanManagementScreenMode.EXECUTION_SUCCESS
+
+
+# ---------------------------------------------------------------------------
+# Issue #50 — 카드 없는 "대상 모호" 질문(unresolvedLine) 우선순위, remainingMinutes 라벨/
+# placeholder, _updateFields API 비노출
+# ---------------------------------------------------------------------------
+
+
+def test_unresolved_question_takes_priority_over_pending_item():
+    request = _make_request(status=SolarRequestStatus.COLLECTING, current_item_order=None)
+    unresolved_message = _make_message(
+        sequence_no=1,
+        role=SolarMessageRole.ASSISTANT,
+        kind=SolarMessageKind.QUESTION,
+        content="어떤 항목을 말씀하시는지 다시 알려주시겠어요?",
+        message_metadata={
+            "unresolved": True,
+            "field": "targetEntityId",
+            "rawLineText": "그 과제 마감 바꿔줘",
+            "action": "UPDATE",
+            "entityType": "TASK",
+            "candidateEntityIds": ["a", "b"],
+        },
+    )
+
+    detail = svc._build_solar_request_detail(request, [unresolved_message], [])
+
+    assert detail.current_question == svc.CurrentQuestion(
+        item_id=None, field="targetEntityId", message="어떤 항목을 말씀하시는지 다시 알려주시겠어요?"
+    )
+    assert detail.input_placeholder == svc._CHANGE_INPUT_PLACEHOLDER
+    assert detail.quick_replies == []
+    assert detail.pending_item_id is None
+
+
+def test_unresolved_question_wins_even_when_info_missing_card_exists():
+    """저장 쪽이 unresolvedLine 존재 시 카드 질문 메시지를 만들지 않으므로 실제로는 카드용
+    QUESTION 메시지가 없다 — 이 상태에서도 currentQuestion이 unresolved 쪽으로 나오는지 확인."""
+    request = _make_request(status=SolarRequestStatus.COLLECTING, current_item_order=None)
+    info_missing_item = _make_item(
+        item_order=1,
+        status=SolarItemStatus.INFO_MISSING,
+        missing_fields=["deadlineAt"],
+        pending_question={"field": "deadlineAt", "message": "마감이 언제인가요?", "attemptCount": 1},
+    )
+    unresolved_message = _make_message(
+        sequence_no=1,
+        role=SolarMessageRole.ASSISTANT,
+        kind=SolarMessageKind.QUESTION,
+        content="어떤 항목을 말씀하시는지 다시 알려주시겠어요?",
+        message_metadata={"unresolved": True, "field": "targetEntityId"},
+    )
+
+    detail = svc._build_solar_request_detail(request, [unresolved_message], [info_missing_item])
+
+    assert detail.current_question.item_id is None
+    assert detail.current_question.field == "targetEntityId"
+
+
+def test_unresolved_question_superseded_by_later_message_falls_back_to_pending_item():
+    request = _make_request(status=SolarRequestStatus.COLLECTING, current_item_order=1)
+    pending_item = _make_item(
+        item_order=1,
+        status=SolarItemStatus.INFO_MISSING,
+        pending_question={"field": "estimatedMinutes", "message": "얼마나 걸릴까요?", "attemptCount": 1},
+    )
+    unresolved_message = _make_message(
+        sequence_no=1,
+        role=SolarMessageRole.ASSISTANT,
+        kind=SolarMessageKind.QUESTION,
+        content="이전 질문",
+        message_metadata={"unresolved": True, "field": "targetEntityId"},
+    )
+    later_user_reply = _make_message(sequence_no=2, role=SolarMessageRole.USER, kind=SolarMessageKind.TEXT, content="답")
+
+    detail = svc._build_solar_request_detail(request, [unresolved_message, later_user_reply], [pending_item])
+
+    assert detail.current_question.item_id == pending_item.id
+    assert detail.current_question.field == "estimatedMinutes"
+
+
+def test_no_unresolved_message_falls_back_to_pending_item_as_before():
+    request = _make_request(status=SolarRequestStatus.COLLECTING, current_item_order=1)
+    pending_item = _make_item(
+        item_order=1,
+        status=SolarItemStatus.INFO_MISSING,
+        pending_question={"field": "estimatedMinutes", "message": "얼마나 걸릴까요?", "attemptCount": 1},
+    )
+
+    detail = svc._build_solar_request_detail(request, [], [pending_item])
+
+    assert detail.current_question.item_id == pending_item.id
+
+
+def test_remaining_minutes_missing_field_label_in_summary_text():
+    item = _make_item(
+        action=SolarAction.UPDATE,
+        status=SolarItemStatus.INFO_MISSING,
+        missing_fields=["remainingMinutes"],
+        normalized_payload={"title": "자료구조 과제"},
+    )
+
+    detail = svc._build_item_detail(item)
+
+    assert "남은 시간" in detail.summary_text
+
+
+def test_remaining_minutes_current_question_uses_estimated_minutes_placeholder():
+    request = _make_request(status=SolarRequestStatus.COLLECTING, current_item_order=1)
+    pending_item = _make_item(
+        item_order=1,
+        action=SolarAction.UPDATE,
+        status=SolarItemStatus.INFO_MISSING,
+        missing_fields=["remainingMinutes"],
+        pending_question={"field": "remainingMinutes", "message": "남은 시간이 얼마나 되나요?", "attemptCount": 1},
+    )
+
+    detail = svc._build_solar_request_detail(request, [], [pending_item])
+
+    assert detail.current_question.field == "remainingMinutes"
+    assert detail.input_placeholder == svc._INPUT_PLACEHOLDERS["estimatedMinutes"]
+
+
+def test_update_fields_key_stripped_from_api_response_normalized_payload():
+    from app.schemas.plan_management import to_plan_management_state_response
+    from app.services.plan_management_service import PlanManagementState
+
+    item = _make_item(
+        action=SolarAction.UPDATE,
+        status=SolarItemStatus.READY,
+        target_task_id=uuid.uuid4(),
+        normalized_payload={"title": "자료구조 과제", "_updateFields": ["title"]},
+    )
+    request = _make_request(status=SolarRequestStatus.CHANGE_CONFIRMATION)
+    detail = svc._build_solar_request_detail(request, [], [item])
+    state = PlanManagementState(screen_mode=svc.PlanManagementScreenMode.CHANGE_CONFIRMATION, active_cycle=None, request_detail=detail)
+
+    response = to_plan_management_state_response(state)
+
+    normalized_payload = response.data.request.request_items[0].normalized_payload
+    assert "_updateFields" not in normalized_payload
+    assert normalized_payload["title"] == "자료구조 과제"
+
+
+def test_current_question_item_id_none_serializes_to_null_in_api_response():
+    from app.schemas.plan_management import to_plan_management_state_response
+    from app.services.plan_management_service import PlanManagementState
+
+    request = _make_request(status=SolarRequestStatus.COLLECTING, current_item_order=None)
+    unresolved_message = _make_message(
+        sequence_no=1,
+        role=SolarMessageRole.ASSISTANT,
+        kind=SolarMessageKind.QUESTION,
+        content="어떤 항목을 말씀하시는지 다시 알려주시겠어요?",
+        message_metadata={"unresolved": True, "field": "targetEntityId"},
+    )
+    detail = svc._build_solar_request_detail(request, [unresolved_message], [])
+    state = PlanManagementState(screen_mode=svc.PlanManagementScreenMode.COLLECTING, active_cycle=None, request_detail=detail)
+
+    response = to_plan_management_state_response(state)
+
+    body = response.model_dump(by_alias=True)
+    assert body["data"]["request"]["currentQuestion"]["itemId"] is None
