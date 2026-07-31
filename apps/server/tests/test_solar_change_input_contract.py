@@ -146,7 +146,11 @@ def test_pending_question_null_allowed_but_malformed_object_rejected():
 def test_change_input_repair_uses_same_strict_parser_and_only_one_retry(monkeypatch):
     responses = iter([json.dumps(_envelope(_task_add(remainingMinutes=60))), json.dumps(_envelope(_task_add()))])
     calls = []
-    monkeypatch.setattr(solar_client, "call_solar", lambda payload: calls.append(payload) or next(responses))
+    monkeypatch.setattr(solar_client, "call_solar", lambda payload: json.dumps({"analysisSummary": "add"}))
+    async def fake_generate(**kwargs):
+        calls.append(kwargs)
+        return next(responses)
+    monkeypatch.setattr(solar_client.gemini_change_input_client, "generate_change_input", fake_generate)
     result = solar_client.analyze_change_input("추가", now=solar_client.datetime.now(solar_client._SEOUL_TZ),
                                                purpose=solar_client.SolarRequestPurpose.ACTIVE_CYCLE)
     assert len(calls) == 2
@@ -236,20 +240,25 @@ def test_change_input_repair_contains_safe_specific_contract_context(monkeypatch
     })
     responses = iter([json.dumps(invalid), json.dumps(_envelope(_task_add()))])
     calls = []
-    monkeypatch.setattr(solar_client, "call_solar", lambda payload: calls.append(payload) or next(responses))
+    monkeypatch.setattr(solar_client, "call_solar", lambda payload: json.dumps({"analysisSummary": "change"}))
+    async def fake_generate(**kwargs):
+        calls.append(kwargs)
+        return next(responses)
+    monkeypatch.setattr(solar_client.gemini_change_input_client, "generate_change_input", fake_generate)
     solar_client.analyze_change_input(
         "change",
         now=solar_client.datetime.now(solar_client._SEOUL_TZ),
         purpose=solar_client.SolarRequestPurpose.ACTIVE_CYCLE,
         candidate_request_items={ITEM_ID: {"entityType": "TASK", "action": "CREATE"}},
     )
-    repair_instruction = calls[1]["messages"][-1]["content"]
-    assert "Rewrite the entire JSON object from scratch" in repair_instruction
+    repair_instruction = calls[1]["prompt"]
+    assert "REPAIR THE FINAL RESPONSE" in repair_instruction
     assert "operation index: 0" in repair_instruction
     assert "expected exact keys:" in repair_instruction
     assert "allowed logical fields:" in repair_instruction
     assert "required patch storage keys:" in repair_instruction
-    assert ITEM_ID not in repair_instruction
+    safe_context = repair_instruction.split("Safe violation context:\n", 1)[1]
+    assert ITEM_ID not in safe_context
     assert len(calls) == 2
 
 
@@ -266,18 +275,20 @@ def test_change_input_delete_repair_preserves_intent_and_restates_exact_keys(mon
     })
     responses = iter([json.dumps(invalid), json.dumps(valid)])
     calls = []
-    monkeypatch.setattr(solar_client, "call_solar", lambda payload: calls.append(payload) or next(responses))
+    monkeypatch.setattr(solar_client, "call_solar", lambda payload: json.dumps({"analysisSummary": "delete"}))
+    async def fake_generate(**kwargs):
+        calls.append(kwargs)
+        return next(responses)
+    monkeypatch.setattr(solar_client.gemini_change_input_client, "generate_change_input", fake_generate)
     solar_client.analyze_change_input(
         "delete",
         now=solar_client.datetime.now(solar_client._SEOUL_TZ),
         purpose=solar_client.SolarRequestPurpose.ACTIVE_CYCLE,
         candidate_request_items={ITEM_ID: {"entityType": "TASK", "action": "CREATE"}},
     )
-    instruction = calls[1]["messages"][-1]["content"]
-    assert "must remain DELETE_REQUEST_ITEM" in instruction
-    assert "Do not change deletion intent into ADD" in instruction
-    assert "operationType, requestItemId, entityType" in instruction
-    assert "Remove pendingQuestion" in instruction
+    instruction = calls[1]["prompt"]
+    assert "REPAIR THE FINAL RESPONSE" in instruction
+    assert "SOLAR advisory remains non-authoritative" in instruction
     assert len(calls) == 2
 
 

@@ -3,6 +3,7 @@ Session을 쓰고, FastAPI의 동기 endpoint(threadpool에서 실행)와 짝을
 블로킹 호출을 여기서 그대로 써도 메인 이벤트 루프를 막지 않는다. async로 감싸지 않는다.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -17,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 from app.core.config import get_solar_api_key, get_solar_base_url, get_solar_model
 from app.models.enums import SolarRequestPurpose
+from app.services import gemini_change_input_client
 
 _T = TypeVar("_T")
 
@@ -2296,6 +2298,212 @@ def _identity_canonicalize(content: str) -> str:
     return content
 
 
+def _nullable(schema: dict) -> dict:
+    return {"anyOf": [schema, {"type": "null"}]}
+
+
+def _change_pending_question_schema() -> dict:
+    return _nullable({
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "field": {"type": "string", "minLength": 1},
+            "message": {"type": "string", "minLength": 1},
+            "attemptCount": {"type": "integer", "minimum": 1},
+        },
+        "required": ["field", "message", "attemptCount"],
+    })
+
+
+def _build_gemini_change_input_schema(
+    *,
+    candidate_task_ids: set[str],
+    candidate_fixed_schedule_ids: set[str],
+    candidate_request_items: dict[str, dict],
+) -> dict:
+    entity_type = {"type": "string", "enum": ["TASK", "FIXED_SCHEDULE"]}
+    nonblank = {"type": "string", "minLength": 1}
+    nullable_string = _nullable({"type": "string"})
+    operations: list[dict] = []
+
+    task_payload = {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "title": nullable_string,
+            "deadlineAt": nullable_string,
+            "deadlineState": {"type": "string", "enum": ["KNOWN", "NONE", "MISSING"]},
+            "estimatedMinutes": _nullable({"type": "integer", "minimum": 1}),
+            "estimatedMinutesSource": _nullable({"type": "string", "enum": ["USER", "AI_ESTIMATED"]}),
+            "amountText": nullable_string,
+            "amountSource": _nullable({"type": "string", "enum": ["USER", "AI_ESTIMATED", "UNKNOWN"]}),
+        },
+        "required": ["title", "deadlineAt", "deadlineState", "estimatedMinutes",
+                     "estimatedMinutesSource", "amountText", "amountSource"],
+    }
+    fixed_payload = {
+        "type": "object", "additionalProperties": False,
+        "properties": {"title": nullable_string, "startAt": nullable_string, "endAt": nullable_string},
+        "required": ["title", "startAt", "endAt"],
+    }
+    operations.append({
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "operationType": {"type": "string", "enum": ["ADD"]},
+            "entityType": entity_type,
+            "rawLineText": nonblank,
+            "payload": {"anyOf": [task_payload, fixed_payload]},
+            "pendingQuestion": _change_pending_question_schema(),
+        },
+        "required": ["operationType", "entityType", "rawLineText", "payload", "pendingQuestion"],
+    })
+
+    patch_properties = {
+        "title": nullable_string,
+        "deadlineAt": nullable_string,
+        "deadlineState": {"type": "string", "enum": ["KNOWN", "NONE", "MISSING"]},
+        "estimatedMinutes": _nullable({"type": "integer", "minimum": 1}),
+        "estimatedMinutesSource": _nullable({"type": "string", "enum": ["USER", "AI_ESTIMATED"]}),
+        "remainingMinutes": _nullable({"type": "integer", "minimum": 0}),
+        "amountText": nullable_string,
+        "amountSource": _nullable({"type": "string", "enum": ["USER", "AI_ESTIMATED", "UNKNOWN"]}),
+        "startAt": nullable_string,
+        "endAt": nullable_string,
+    }
+    create_item_ids = [
+        item_id for item_id, item in candidate_request_items.items() if item.get("action") == "CREATE"
+    ]
+    all_item_ids = list(candidate_request_items)
+    if create_item_ids:
+        operations.append({
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "operationType": {"type": "string", "enum": ["PATCH_REQUEST_ITEM"]},
+                "requestItemId": {"type": "string", "enum": create_item_ids},
+                "entityType": entity_type,
+                "changedFields": {"type": "array", "minItems": 1, "uniqueItems": True,
+                                  "items": {"type": "string", "enum": ["title", "deadlineAt", "estimatedMinutes", "amount", "startAt", "endAt"]}},
+                "patch": {"type": "object", "additionalProperties": False, "properties": patch_properties},
+                "pendingQuestion": _change_pending_question_schema(),
+            },
+            "required": ["operationType", "requestItemId", "entityType", "changedFields", "patch", "pendingQuestion"],
+        })
+    if all_item_ids:
+        operations.append({
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "operationType": {"type": "string", "enum": ["DELETE_REQUEST_ITEM"]},
+                "requestItemId": {"type": "string", "enum": all_item_ids},
+                "entityType": entity_type,
+            },
+            "required": ["operationType", "requestItemId", "entityType"],
+        })
+
+    all_entity_ids = list(candidate_task_ids) + list(candidate_fixed_schedule_ids)
+    if all_entity_ids:
+        operations.append({
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "operationType": {"type": "string", "enum": ["UPDATE_ENTITY"]},
+                "targetEntityId": {"type": "string", "enum": all_entity_ids},
+                "entityType": entity_type,
+                "updateFields": {"type": "array", "minItems": 1, "uniqueItems": True,
+                                 "items": {"type": "string", "enum": ["title", "deadlineAt", "estimatedMinutes", "remainingMinutes", "amount", "startAt", "endAt"]}},
+                "patch": {"type": "object", "additionalProperties": False, "properties": patch_properties},
+                "pendingQuestion": _change_pending_question_schema(),
+            },
+            "required": ["operationType", "targetEntityId", "entityType", "updateFields", "patch", "pendingQuestion"],
+        })
+        operations.append({
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "operationType": {"type": "string", "enum": ["DELETE_ENTITY"]},
+                "targetEntityId": {"type": "string", "enum": all_entity_ids},
+                "entityType": entity_type,
+            },
+            "required": ["operationType", "targetEntityId", "entityType"],
+        })
+
+    unresolved = {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "intendedOperation": {"type": "string", "enum": ["PATCH_REQUEST_ITEM", "DELETE_REQUEST_ITEM", "UPDATE_ENTITY", "DELETE_ENTITY"]},
+            "targetKind": {"type": "string", "enum": ["REQUEST_ITEM", "ENTITY"]},
+            "entityType": entity_type,
+            "rawLineText": nonblank,
+            "message": nonblank,
+        },
+        "required": ["intendedOperation", "targetKind", "entityType", "rawLineText", "message"],
+    }
+    base_properties = {
+        "analysisMessage": nonblank,
+        "operations": {"type": "array", "items": {"anyOf": operations}},
+        "unresolvedOperation": _nullable(unresolved),
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": base_properties,
+        "required": ["analysisMessage", "operations", "unresolvedOperation"],
+        "anyOf": [
+            {"properties": {"operations": {"type": "array", "minItems": 1, "items": {"anyOf": operations}},
+                            "unresolvedOperation": {"type": "null"}}},
+            {"properties": {"operations": {"type": "array", "maxItems": 0},
+                            "unresolvedOperation": unresolved}},
+        ],
+    }
+
+
+def _build_solar_change_input_advisory_messages(message: str, *, context: dict) -> list[dict]:
+    prompt = """Analyze the user's CHANGE_INPUT intent as non-authoritative advice for another model.
+Return one small JSON object. Describe suggested operations, referenced candidate kinds/IDs, missing information, ambiguity reason, and a short analysis summary. Do not generate payloads, patches, pending questions, or final user-facing messages. A new item with missing fields is still a new ADD intent. Use only candidate IDs from context."""
+    return [
+        {"role": "system", "content": f"{prompt}\n\nCANDIDATE CONTEXT\n{json.dumps(context, ensure_ascii=False)}"},
+        {"role": "user", "content": message},
+    ]
+
+
+def _get_solar_change_input_advisory(message: str, *, context: dict) -> str | None:
+    try:
+        content = call_solar({"messages": _build_solar_change_input_advisory_messages(message, context=context)})
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict):
+            raise ValueError("advisory must be an object")
+        return json.dumps(parsed, ensure_ascii=False)
+    except (SolarUnavailableError, json.JSONDecodeError, TypeError, ValueError):
+        logger.warning("CHANGE_INPUT_SOLAR_ADVISORY_FALLBACK")
+        return None
+
+
+def _build_gemini_change_input_prompt(
+    message: str,
+    *,
+    now: datetime,
+    context: dict,
+    solar_advisory: str | None,
+) -> str:
+    advisory = solar_advisory if solar_advisory is not None else "SOLAR advisory unavailable"
+    return f"""Produce the final CHANGE_INPUT analysis for the strict server contract.
+Use the original user message and candidate context as authoritative. The SOLAR advisory is optional and non-authoritative: correct or ignore it when it conflicts with the user intent or candidates.
+Support ADD, PATCH_REQUEST_ITEM, DELETE_REQUEST_ITEM, UPDATE_ENTITY, DELETE_ENTITY, unresolved target selection, and multiple operations in user order.
+For sparse PATCH/UPDATE, changedFields/updateFields contain logical fields and patch contains exactly their mapped storage keys. Do not emit untouched keys. DELETE operations contain only their three exact keys. Missing ADD fields use null pairs and a pendingQuestion for the canonical first missing field.
+Current time: {now.astimezone(_SEOUL_TZ).isoformat()}
+CANDIDATE CONTEXT:
+{json.dumps(context, ensure_ascii=False)}
+SOLAR ADVISORY:
+{advisory}
+ORIGINAL USER MESSAGE:
+{message}"""
+
+
+def _run_gemini_change_input(*, prompt: str, response_json_schema: dict) -> str:
+    try:
+        return asyncio.run(gemini_change_input_client.generate_change_input(
+            prompt=prompt, response_json_schema=response_json_schema
+        ))
+    except gemini_change_input_client.GeminiChangeInputError as exc:
+        raise SolarUnavailableError("Gemini CHANGE_INPUT analysis failed") from exc
+
+
 def analyze_change_input(
     message: str,
     *,
@@ -2314,17 +2522,24 @@ def analyze_change_input(
     candidate_request_items = candidate_request_items or {}
 
     prompt_request_items = [{"id": item_id, **info} for item_id, info in candidate_request_items.items()]
-    messages = _build_change_input_operation_prompt_messages(
-        message,
-        now=now,
-        cycle_start=cycle_start,
-        cycle_end=cycle_end,
-        candidate_tasks=candidate_tasks,
-        candidate_fixed_schedules=candidate_fixed_schedules,
-        candidate_request_items=prompt_request_items,
-    )
     candidate_task_ids = {str(c["id"]) for c in candidate_tasks}
     candidate_fixed_schedule_ids = {str(c["id"]) for c in candidate_fixed_schedules}
+    context = {
+        "cycleStart": cycle_start.isoformat() if cycle_start is not None else None,
+        "cycleEnd": cycle_end.isoformat() if cycle_end is not None else None,
+        "candidateTasks": candidate_tasks,
+        "candidateFixedSchedules": candidate_fixed_schedules,
+        "candidateRequestItems": prompt_request_items,
+    }
+    solar_advisory = _get_solar_change_input_advisory(message, context=context)
+    response_schema = _build_gemini_change_input_schema(
+        candidate_task_ids=candidate_task_ids,
+        candidate_fixed_schedule_ids=candidate_fixed_schedule_ids,
+        candidate_request_items=candidate_request_items,
+    )
+    prompt = _build_gemini_change_input_prompt(
+        message, now=now, context=context, solar_advisory=solar_advisory
+    )
 
     def _parse(content: str) -> ChangeInputAnalysisResult:
         return parse_change_input_response(
@@ -2334,9 +2549,19 @@ def analyze_change_input(
             candidate_request_items=candidate_request_items,
         )
 
-    return _call_and_parse_with_repair(
-        messages,
-        _parse,
-        canonicalize_fn=_identity_canonicalize,
-        repair_context_fn=_build_change_input_repair_context,
+    content = _run_gemini_change_input(prompt=prompt, response_json_schema=response_schema)
+    try:
+        return _parse(content)
+    except SolarUnavailableError as violation:
+        safe_context = _build_change_input_repair_context(content, violation)
+        logger.warning("GEMINI_CHANGE_INPUT_REPAIR_ATTEMPT code=%s", violation.code)
+        repair_prompt = (
+            f"{prompt}\n\nREPAIR THE FINAL RESPONSE. Re-evaluate the original user intent and candidates; "
+            "the SOLAR advisory remains non-authoritative. Return a complete response matching the same structured "
+            "schema. Do not ignore extra keys, invent IDs, or copy invalid fields.\n"
+            f"Safe violation context:\n{safe_context}"
+        )
+    repair_content = _run_gemini_change_input(
+        prompt=repair_prompt, response_json_schema=response_schema
     )
+    return _parse(repair_content)
