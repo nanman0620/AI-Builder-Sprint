@@ -1,6 +1,6 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ErrorView } from '@/src/components/common/error-view';
@@ -19,24 +19,58 @@ export default function SettingsScreen() {
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const [isLogoutVisible, setIsLogoutVisible] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const profileRef = useRef<Profile | null>(null);
+  const isMountedRef = useRef(true);
+  const inFlightRef = useRef<Promise<void> | null>(null);
 
-  const loadProfile = useCallback(async () => {
-    setLoadError(null);
-    setLogoutError(null);
-    setIsLoading(true);
-    try {
-      const response = await getProfile();
-      setProfile(response);
-    } catch {
-      setLoadError(profile ? '프로필을 새로 불러오지 못했습니다.' : '정보를 불러오지 못했어요.');
-    } finally {
-      setIsLoading(false);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  const loadProfile = useCallback((): Promise<void> => {
+    if (inFlightRef.current) {
+      return inFlightRef.current;
     }
-  }, [profile]);
+
+    if (isMountedRef.current) {
+      setLoadError(null);
+      setLogoutError(null);
+      if (!profileRef.current) {
+        setIsLoading(true);
+      }
+    }
+
+    const request = getProfile()
+      .then((response) => {
+        profileRef.current = response;
+        if (isMountedRef.current) {
+          setProfile(response);
+        }
+      })
+      .catch(() => {
+        if (isMountedRef.current) {
+          setLoadError(
+            profileRef.current ? '프로필을 새로 불러오지 못했습니다.' : '정보를 불러오지 못했어요.'
+          );
+        }
+      })
+      .finally(() => {
+        inFlightRef.current = null;
+        if (isMountedRef.current) {
+          setIsLoading(false);
+        }
+      });
+
+    inFlightRef.current = request;
+    return request;
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
-      loadProfile();
+      void loadProfile();
     }, [loadProfile])
   );
 
@@ -72,7 +106,7 @@ export default function SettingsScreen() {
           <ProfileCard profile={profile} />
           <View style={styles.group}>
             <Text style={styles.groupTitle}>계정 관리</Text>
-            <Pressable style={styles.menuItem} onPress={() => router.push('profile')}>
+            <Pressable style={styles.menuItem} onPress={() => router.push('/(tabs)/settings/profile')}>
               <Text style={styles.menuText}>개인정보 수정</Text>
             </Pressable>
             <Pressable style={styles.menuItem} onPress={() => setIsLogoutVisible(true)}>
