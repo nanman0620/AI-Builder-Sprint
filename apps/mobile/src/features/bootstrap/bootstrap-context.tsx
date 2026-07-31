@@ -17,6 +17,7 @@ type BootstrapContextValue = {
   // session 재확인 → GET /bootstrap 호출까지 한 번에 수행한다. 이미 진행 중인 호출이 있으면
   // 새 요청을 만들지 않고 진행 중인 결과를 그대로 반환해 중복 호출을 막는다.
   sync: () => Promise<BootstrapSyncResult>;
+  reset: () => void;
 };
 
 const BootstrapContext = createContext<BootstrapContextValue | null>(null);
@@ -29,6 +30,16 @@ export function BootstrapProvider({ children }: { children: ReactNode }) {
   const isMountedRef = useRef(true);
   const latestRequestIdRef = useRef(0);
   const inFlightRef = useRef<Promise<BootstrapSyncResult> | null>(null);
+
+  const reset = useCallback(() => {
+    latestRequestIdRef.current += 1;
+    inFlightRef.current = null;
+    if (isMountedRef.current) {
+      setStatus('idle');
+      setData(null);
+      setError(null);
+    }
+  }, []);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -99,7 +110,9 @@ export function BootstrapProvider({ children }: { children: ReactNode }) {
     };
 
     const promise = run().finally(() => {
-      inFlightRef.current = null;
+      if (inFlightRef.current === promise) {
+        inFlightRef.current = null;
+      }
     });
     inFlightRef.current = promise;
     return promise;
@@ -112,7 +125,7 @@ export function BootstrapProvider({ children }: { children: ReactNode }) {
     void sync();
   }, [sync]);
 
-  const value: BootstrapContextValue = { status, data, error, sync };
+  const value: BootstrapContextValue = { status, data, error, sync, reset };
 
   return <BootstrapContext.Provider value={value}>{children}</BootstrapContext.Provider>;
 }

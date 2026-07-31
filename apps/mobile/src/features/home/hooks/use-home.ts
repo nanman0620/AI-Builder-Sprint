@@ -2,6 +2,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiClientError } from '@/src/services/api/client';
+import { useAppSync } from '@/src/features/app-sync/app-sync-context';
 
 import { getHomeCurrent, patchPlanBlockCheckState, postCheckInAcknowledge, postDeadlineWarningsAcknowledge } from '../api';
 import { applyOptimisticCheckState, computeOptimisticProgress } from '../logic';
@@ -22,6 +23,7 @@ const CHECK_STATE_REQUIRES_RELOAD_CODES = new Set([
 ]);
 
 export function useHome() {
+  const { epochs, resetEpoch } = useAppSync();
   const [data, setData] = useState<HomeCurrentResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasLoadError, setHasLoadError] = useState(false);
@@ -51,9 +53,12 @@ export function useHome() {
 
   // 진행 중인 GET /home/current 하나를 공유해 중복 요청을 막는다(bootstrap-context.tsx와 동일한 패턴).
   const inFlightRef = useRef<Promise<void> | null>(null);
+  const loadGenerationRef = useRef(0);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // schedulePoll이 loadHome을 참조할 때 useCallback 순환 의존을 피하기 위한 최신 함수 포인터.
   const loadHomeRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const seenRefreshEpochRef = useRef(epochs.home);
+  const seenResetEpochRef = useRef(resetEpoch);
 
   const clearPollTimer = useCallback(() => {
     if (pollTimerRef.current) {
@@ -80,12 +85,13 @@ export function useHome() {
       return inFlightRef.current;
     }
 
+    const generation = loadGenerationRef.current;
     setIsLoading(true);
 
     const run = async () => {
       try {
         const result = await getHomeCurrent();
-        if (!isActiveRef.current) {
+        if (!isActiveRef.current || generation !== loadGenerationRef.current) {
           return;
         }
         setData(result);
@@ -97,7 +103,7 @@ export function useHome() {
           clearPollTimer();
         }
       } catch {
-        if (!isActiveRef.current) {
+        if (!isActiveRef.current || generation !== loadGenerationRef.current) {
           return;
         }
         // FINALIZING 조회 실패는 정산 실패가 아니다(§7). 기존 화면을 유지하고 폴링도 계속 이어간다.
@@ -109,14 +115,17 @@ export function useHome() {
         }
         // 그 외(FINALIZING이 아닌 상태에서의 백그라운드 재조회 실패)는 마지막으로 확인된 화면을 그대로 유지한다.
       } finally {
-        if (isActiveRef.current) {
+        if (isActiveRef.current && generation === loadGenerationRef.current) {
           setIsLoading(false);
         }
-        inFlightRef.current = null;
       }
     };
 
-    const promise = run();
+    const promise = run().finally(() => {
+      if (inFlightRef.current === promise) {
+        inFlightRef.current = null;
+      }
+    });
     inFlightRef.current = promise;
     return promise;
   }, [clearPollTimer, schedulePoll]);
@@ -136,6 +145,41 @@ export function useHome() {
     }, [loadHome, clearPollTimer])
   );
 
+  useEffect(() => {
+    if (seenRefreshEpochRef.current === epochs.home) {
+      return;
+    }
+    seenRefreshEpochRef.current = epochs.home;
+    if (isActiveRef.current) {
+      void loadHome();
+    }
+  }, [epochs.home, loadHome]);
+
+  useEffect(() => {
+    if (seenResetEpochRef.current === resetEpoch) {
+      return;
+    }
+    seenResetEpochRef.current = resetEpoch;
+    isActiveRef.current = false;
+    loadGenerationRef.current += 1;
+    inFlightRef.current = null;
+    clearPollTimer();
+    dataRef.current = null;
+    setData(null);
+    setIsLoading(true);
+    setHasLoadError(false);
+    setFinalizingRefreshError(false);
+    checkPendingRef.current = false;
+    deadlineAckPendingRef.current = false;
+    checkInAckPendingRef.current = false;
+    setIsCheckPending(false);
+    setIsDeadlineAckPending(false);
+    setIsCheckInAckPending(false);
+    setCheckError(null);
+    setDeadlineAckError(null);
+    setCheckInAckError(null);
+  }, [clearPollTimer, resetEpoch]);
+
   // PlanBlock 체크/해제. MVP에서는 한 번에 하나의 체크 요청만 허용한다(§6).
   const toggleCheckState = useCallback(
     async (planBlockId: string, nextChecked: boolean) => {
@@ -143,6 +187,7 @@ export function useHome() {
         return;
       }
       checkPendingRef.current = true;
+      const generation = loadGenerationRef.current;
 
       const previousPlanBlocks = dataRef.current.planBlocks;
       const previousProgress = dataRef.current.progress;
@@ -160,7 +205,7 @@ export function useHome() {
 
       try {
         const result = await patchPlanBlockCheckState(planBlockId, nextChecked);
-        if (!isActiveRef.current) {
+        if (!isActiveRef.current || generation !== loadGenerationRef.current) {
           return;
         }
         setData((prev) =>
@@ -175,7 +220,7 @@ export function useHome() {
             : prev
         );
       } catch (error) {
-        if (!isActiveRef.current) {
+        if (!isActiveRef.current || generation !== loadGenerationRef.current) {
           return;
         }
         // 실패 시 기존 planBlocks·progress로 복구한다(체크 원상 복구, §6).
