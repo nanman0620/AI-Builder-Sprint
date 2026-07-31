@@ -32,7 +32,8 @@ class DecisionPromptOut(BaseModel):
 
 
 class CurrentQuestionOut(BaseModel):
-    item_id: uuid.UUID = Field(alias="itemId")
+    # Issue #50: 카드 없는 "대상 모호" 질문은 itemId가 없다.
+    item_id: uuid.UUID | None = Field(alias="itemId")
     field: str
     message: str
 
@@ -145,6 +146,14 @@ def _to_solar_message_out(message) -> SolarMessageOut:
     )
 
 
+def _to_normalized_payload_out(normalized_payload: object) -> dict | None:
+    """Issue #50: `_updateFields`는 실행 Worker/향후 `/messages`를 위한 서버 전용 내부 키라
+    기존 `PlanManagementState` 계약에 없는 값을 API 응답에 노출하지 않도록 걸러낸다."""
+    if not isinstance(normalized_payload, dict):
+        return None
+    return {key: value for key, value in normalized_payload.items() if key != "_updateFields"}
+
+
 def _to_solar_request_item_out(detail) -> SolarRequestItemOut:
     item = detail.item
     return SolarRequestItemOut(
@@ -159,7 +168,7 @@ def _to_solar_request_item_out(detail) -> SolarRequestItemOut:
         raw_line_text=item.raw_line_text,
         title=detail.title,
         summary_text=detail.summary_text,
-        normalized_payload=item.normalized_payload if isinstance(item.normalized_payload, dict) else None,
+        normalized_payload=_to_normalized_payload_out(item.normalized_payload),
         missing_fields=item.missing_fields if isinstance(item.missing_fields, list) else [],
         pending_question=PendingQuestionOut(
             field=detail.pending_question.field,

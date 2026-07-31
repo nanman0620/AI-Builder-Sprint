@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -10,11 +12,20 @@ from app.api.v1.me import router as me_router
 from app.api.v1.plan_blocks import router as plan_blocks_router
 from app.api.v1.plan_management import router as plan_management_router
 from app.api.v1.solar_requests import router as solar_requests_router
+from app.core.config import get_solar_api_key
 from app.api.v1.tasks import router as tasks_router
 from app.core.errors import register_exception_handlers
 from app.workers.check_in_worker import check_in_lifespan
 
-app = FastAPI(title="이음(E-um) MVP API", lifespan=check_in_lifespan)
+
+@asynccontextmanager
+async def _app_lifespan(app: FastAPI):
+    get_solar_api_key()
+    async with check_in_lifespan(app):
+        yield
+
+
+app = FastAPI(title="이음(E-um) MVP API", lifespan=_app_lifespan)
 
 DEV_ALLOWED_ORIGINS = [
     "http://localhost:8081",

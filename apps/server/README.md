@@ -33,7 +33,9 @@ python -m pip install -e ".[dev]"
 
 ### 4. 환경변수 설정
 
-`.env.example`을 복사해 `apps/server/.env`를 만들고 `DATABASE_URL`과 `SUPABASE_URL`을 모두 설정한다. `.env`는 Git에 포함되지 않는다.
+`.env.example`을 복사해 `apps/server/.env`를 만들고 `DATABASE_URL`, `SUPABASE_URL`, `SOLAR_API_KEY`를 모두 설정한다(`SOLAR_API_KEY`는 서버 기동 시 필수로 검증된다). `.env`는 Git에 포함되지 않는다.
+
+`SOLAR_API_KEY`는 팀원마다 [console.upstage.ai](https://console.upstage.ai)에서 개인 계정으로 직접 발급받아 각자의 로컬 `.env`에 넣는다. 팀 공용 키를 만들어 Slack·이메일·커밋 메시지·Issue·PR 본문 등으로 전달하지 않는다.
 
 ```powershell
 copy .env.example .env
@@ -65,5 +67,8 @@ pytest
 | --- | --- |
 | `DATABASE_URL` | Supabase PostgreSQL 연결 문자열 |
 | `SUPABASE_URL` | Supabase Access Token의 JWKS 및 issuer 검증에 사용하는 프로젝트 URL |
+| `SOLAR_API_KEY` | Upstage SOLAR(Chat Completions) API key. 서버 기동 시 필수로 검증된다 |
+| `SOLAR_BASE_URL` | SOLAR API base URL. 비워두면 `https://api.upstage.ai/v1` |
+| `SOLAR_MODEL` | 사용할 SOLAR 모델명. 비워두면 `solar-pro2` |
 
 실제 값은 `.env.example`이 아니라 로컬 `apps/server/.env`(git 제외)에만 설정한다.
