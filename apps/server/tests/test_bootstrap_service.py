@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -9,6 +9,8 @@ from app.models.planning_cycle import PlanningCycle
 from app.models.solar_request import SolarRequest
 from app.models.user_profile import UserProfile
 from app.services import bootstrap_service, home_service, profile_service, solar_request_service
+from app.services.check_in_service import CheckInResultState, FinalizingInfo
+from app.services.deadline_warning_service import DeadlineWarningItem, DeadlineWarningNotice
 from app.services.plan_block_service import PlanBlockProgress
 
 SEOUL_TZ = ZoneInfo("Asia/Seoul")
@@ -80,7 +82,9 @@ def _make_request(**overrides):
     return SolarRequest(**defaults)
 
 
-def _home_state(*, home_mode, active_cycle=None):
+def _home_state(
+    *, home_mode, active_cycle=None, blocking_notice=None, finalizing=None, check_in_result=None
+):
     return home_service.HomeCurrentState(
         home_mode=home_mode,
         server_time=NOW,
@@ -91,6 +95,9 @@ def _home_state(*, home_mode, active_cycle=None):
         if active_cycle
         else None,
         plan_blocks=[],
+        blocking_notice=blocking_notice,
+        finalizing=finalizing,
+        check_in_result=check_in_result,
     )
 
 
@@ -232,3 +239,105 @@ def test_current_request_completed_unacknowledged_maps_to_execution_success(patc
     state = bootstrap_service.get_bootstrap_state(_NoQuerySession(), USER_ID, now=NOW)
 
     assert state.initial_screen == bootstrap_service.InitialScreen.EXECUTION_SUCCESS
+
+
+def test_finalizing_home_mode_becomes_initial_screen(patch_dependencies):
+    profile = _make_profile()
+    finalizing = FinalizingInfo(
+        check_in_id=uuid.uuid4(),
+        check_date=date(2026, 7, 30),
+        period=PlanPeriod.AFTERNOON,
+        finalization_started_at=NOW,
+    )
+    home_state = _home_state(home_mode=home_service.HomeMode.FINALIZING, finalizing=finalizing)
+    patch_dependencies(profile=profile, home_state=home_state, current_request=None)
+
+    state = bootstrap_service.get_bootstrap_state(_NoQuerySession(), USER_ID, now=NOW)
+
+    assert state.initial_screen == bootstrap_service.InitialScreen.FINALIZING
+    # 현재 SOLAR 요청이 없어도 home payload는 항상 함께 계산·반환된다.
+    assert state.home_state is home_state
+
+
+def test_check_in_result_home_mode_becomes_initial_screen(patch_dependencies):
+    profile = _make_profile()
+    result_state = CheckInResultState(
+        id=uuid.uuid4(),
+        check_date=date(2026, 7, 29),
+        period=PlanPeriod.MORNING,
+        total_plan_count=3,
+        completed_plan_count=2,
+        not_done_plan_count=1,
+        score=67,
+        replan_unplaced_minutes=0,
+        finalized_at=NOW,
+        cycle_ended=False,
+        completed_plans=[],
+        not_done_plans=[],
+    )
+    home_state = _home_state(
+        home_mode=home_service.HomeMode.CHECK_IN_RESULT, check_in_result=result_state
+    )
+    patch_dependencies(profile=profile, home_state=home_state, current_request=None)
+
+    state = bootstrap_service.get_bootstrap_state(_NoQuerySession(), USER_ID, now=NOW)
+
+    assert state.initial_screen == bootstrap_service.InitialScreen.CHECK_IN_RESULT
+
+
+def test_deadline_warning_overrides_initial_screen_but_keeps_home_mode(patch_dependencies):
+    profile = _make_profile()
+    cycle = _make_cycle()
+    notice = DeadlineWarningNotice(
+        items=[
+            DeadlineWarningItem(
+                task_id=uuid.uuid4(),
+                title="과제",
+                deadline_at=NOW + timedelta(days=1),
+                required_minutes=180,
+                available_minutes=120,
+                shortage_minutes=60,
+                created_at=NOW,
+            )
+        ]
+    )
+    home_state = _home_state(
+        home_mode=home_service.HomeMode.IN_PROGRESS, active_cycle=cycle, blocking_notice=notice
+    )
+    patch_dependencies(profile=profile, home_state=home_state, current_request=None)
+
+    state = bootstrap_service.get_bootstrap_state(_NoQuerySession(), USER_ID, now=NOW)
+
+    assert state.initial_screen == bootstrap_service.InitialScreen.DEADLINE_WARNING
+    # initialScreen만 DEADLINE_WARNING으로 덮이고 home.homeMode 자체는 그대로 유지된다.
+    assert state.home_state.home_mode == home_service.HomeMode.IN_PROGRESS
+    assert state.home_state.blocking_notice is notice
+
+
+def test_current_request_takes_priority_over_deadline_warning(patch_dependencies):
+    """현재 SOLAR 요청이 있으면 home의 DEADLINE_WARNING보다 요청 상태가 우선한다."""
+    profile = _make_profile()
+    notice = DeadlineWarningNotice(
+        items=[
+            DeadlineWarningItem(
+                task_id=uuid.uuid4(),
+                title="과제",
+                deadline_at=NOW + timedelta(days=1),
+                required_minutes=180,
+                available_minutes=120,
+                shortage_minutes=60,
+                created_at=NOW,
+            )
+        ]
+    )
+    home_state = _home_state(home_mode=home_service.HomeMode.IN_PROGRESS, blocking_notice=notice)
+    current_request = _make_request(status=SolarRequestStatus.FINAL_REVIEW)
+    patch_dependencies(
+        profile=profile, home_state=home_state, current_request=current_request
+    )
+
+    state = bootstrap_service.get_bootstrap_state(_NoQuerySession(), USER_ID, now=NOW)
+
+    assert state.initial_screen == bootstrap_service.InitialScreen.FINAL_REVIEW
+    # home payload는 여전히 함께 반환된다(계산 자체는 생략하지 않음).
+    assert state.home_state is home_state
