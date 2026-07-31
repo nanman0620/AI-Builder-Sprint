@@ -671,3 +671,256 @@ def test_call_solar_content_not_string_rejected(monkeypatch):
 
     with pytest.raises(SolarUnavailableError):
         call_solar({"messages": []})
+
+
+# ---------------------------------------------------------------------------
+# canonicalization — 좁은 whitelist 3가지만 정규화하고 그 외 값은 손대지 않는지 단위 검증
+# ---------------------------------------------------------------------------
+
+
+def test_canonicalize_amount_missing_sentinel_normalizes_both_to_none():
+    payload = {
+        "title": "T",
+        "deadlineAt": None,
+        "estimatedMinutes": 10,
+        "estimatedMinutesSource": "USER",
+        "remainingMinutes": None,
+        "amountText": None,
+        "amountSource": "MISSING",
+    }
+
+    solar_client._canonicalize_amount_missing_sentinel(payload)
+
+    assert payload["amountSource"] is None
+    assert payload["amountText"] is None
+    # 타깃 밖의 필드는 절대 손대지 않는다.
+    assert payload["title"] == "T"
+    assert payload["estimatedMinutes"] == 10
+
+
+def test_canonicalize_amount_missing_sentinel_blank_text_also_normalized():
+    payload = {"amountText": "   ", "amountSource": "MISSING"}
+
+    solar_client._canonicalize_amount_missing_sentinel(payload)
+
+    assert payload["amountSource"] is None
+    assert payload["amountText"] is None
+
+
+def test_canonicalize_amount_missing_sentinel_does_not_touch_valid_values():
+    payload = {"amountText": "5개", "amountSource": "USER"}
+
+    solar_client._canonicalize_amount_missing_sentinel(payload)
+
+    assert payload == {"amountText": "5개", "amountSource": "USER"}
+
+
+def test_canonicalize_amount_missing_sentinel_does_not_touch_amount_text_when_present():
+    """amountSource="MISSING"인데 amountText에 실제 값이 있으면(조건 밖) 손대지 않는다 —
+    이 경우는 strict parser/repair가 그대로 거부해야 한다."""
+    payload = {"amountText": "5개", "amountSource": "MISSING"}
+
+    solar_client._canonicalize_amount_missing_sentinel(payload)
+
+    assert payload == {"amountText": "5개", "amountSource": "MISSING"}
+
+
+def test_canonicalize_untouched_deadline_state_normalizes_when_deadline_not_in_update_fields():
+    item = {
+        "updateFields": ["remainingMinutes"],
+        "deadlineState": "KNOWN",
+        "normalizedPayload": {"deadlineAt": "2026-08-01T23:59:59+09:00", "title": None},
+    }
+
+    solar_client._canonicalize_untouched_deadline_state(item)
+
+    assert item["deadlineState"] == "MISSING"
+    assert item["normalizedPayload"]["deadlineAt"] is None
+    assert item["normalizedPayload"]["title"] is None
+
+
+def test_canonicalize_untouched_deadline_state_no_op_when_deadline_in_update_fields():
+    item = {
+        "updateFields": ["deadlineAt"],
+        "deadlineState": "KNOWN",
+        "normalizedPayload": {"deadlineAt": "2026-08-01T23:59:59+09:00"},
+    }
+
+    solar_client._canonicalize_untouched_deadline_state(item)
+
+    assert item["deadlineState"] == "KNOWN"
+    assert item["normalizedPayload"]["deadlineAt"] == "2026-08-01T23:59:59+09:00"
+
+
+def test_canonicalize_update_field_amount_text_alias_renames_to_amount():
+    item = {"updateFields": ["amountText", "title"]}
+
+    solar_client._canonicalize_update_field_amount_text_alias(item)
+
+    assert item["updateFields"] == ["amount", "title"]
+
+
+def test_canonicalize_update_field_amount_text_alias_no_op_without_amount_text():
+    item = {"updateFields": ["deadlineAt"]}
+
+    solar_client._canonicalize_update_field_amount_text_alias(item)
+
+    assert item["updateFields"] == ["deadlineAt"]
+
+
+def test_canonicalize_update_field_amount_text_alias_deduplicates():
+    item = {"updateFields": ["amount", "amountText"]}
+
+    solar_client._canonicalize_update_field_amount_text_alias(item)
+
+    assert item["updateFields"] == ["amount"]
+
+
+# ---------------------------------------------------------------------------
+# analyze_message — canonicalize → strict parser → (실패 시) repair 최대 1회 흐름
+# ---------------------------------------------------------------------------
+
+
+class _FakeHTTPResponseForAnalyze:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self):
+        return self._body
+
+
+def _success_envelope(content: str) -> bytes:
+    return json.dumps({"choices": [{"message": {"content": content}}]}).encode("utf-8")
+
+
+def _queue_urlopen(monkeypatch, bodies: list[bytes]):
+    """urlopen을 호출 순서대로 bodies를 반환하도록 monkeypatch하고, 호출 횟수를 세는
+    카운터 dict를 반환한다. bodies보다 더 호출되면 AssertionError(최대 호출 횟수 위반)."""
+    call_count = {"n": 0}
+
+    def _fake(request, timeout=None):
+        call_count["n"] += 1
+        idx = call_count["n"] - 1
+        if idx >= len(bodies):
+            raise AssertionError("urlopen이 예상보다 많이 호출됨(최대 호출 횟수 위반)")
+        return _FakeHTTPResponseForAnalyze(bodies[idx])
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake)
+    return call_count
+
+
+_NOW = datetime(2026, 7, 31, 14, 0, tzinfo=timezone.utc)
+
+
+def _pending_field_mismatch_item() -> dict:
+    item = _task_create_item(
+        deadlineAt=None, estimatedMinutes=None, estimatedMinutesSource=None, amountText=None, amountSource=None
+    )
+    item["deadlineState"] = "MISSING"
+    item["pendingQuestion"] = {"field": "estimatedMinutes", "message": "몇 분 걸릴까요?"}
+    return item
+
+
+def test_analyze_message_success_calls_solar_once(monkeypatch):
+    content = _envelope(items=[_task_create_item()])
+    call_count = _queue_urlopen(monkeypatch, [_success_envelope(content)])
+
+    result = solar_client.analyze_message("테스트 메시지", now=_NOW, purpose=SolarRequestPurpose.NEW_CYCLE)
+
+    assert call_count["n"] == 1
+    assert len(result.items) == 1
+    assert result.items[0].missing_fields == []
+
+
+def test_analyze_message_canonicalization_avoids_extra_call(monkeypatch):
+    # amountSource="MISSING"+amountText 없음은 canonicalization으로 null/null로 정규화되므로
+    # (soft-missing) repair 없이 첫 응답만으로 통과해야 한다(호출 1회). 정규화 후 amount가
+    # missing이 되므로 그 필드를 묻는 pendingQuestion을 함께 준다(그래야 다른 규칙에 안 걸림).
+    item_raw = _task_create_item(amountSource="MISSING", amountText=None)
+    item_raw["pendingQuestion"] = {"field": "amount", "message": "분량이 어느 정도인가요?"}
+    content = _envelope(items=[item_raw])
+    call_count = _queue_urlopen(monkeypatch, [_success_envelope(content)])
+
+    result = solar_client.analyze_message("테스트 메시지", now=_NOW, purpose=SolarRequestPurpose.NEW_CYCLE)
+
+    assert call_count["n"] == 1
+    assert result.items[0].missing_fields == ["amount"]
+    assert result.items[0].normalized_payload["amountSource"] is None
+    assert result.items[0].normalized_payload["amountText"] is None
+
+
+def test_analyze_message_repair_succeeds_after_first_violation(monkeypatch):
+    bad_content = _envelope(items=[_pending_field_mismatch_item()])
+    good_content = _envelope(items=[_task_create_item()])
+    call_count = _queue_urlopen(monkeypatch, [_success_envelope(bad_content), _success_envelope(good_content)])
+
+    result = solar_client.analyze_message("테스트 메시지", now=_NOW, purpose=SolarRequestPurpose.NEW_CYCLE)
+
+    assert call_count["n"] == 2
+    assert len(result.items) == 1
+    assert result.items[0].missing_fields == []
+
+
+def test_analyze_message_repair_failure_raises_after_two_calls(monkeypatch):
+    bad_content = _envelope(items=[_pending_field_mismatch_item()])
+    call_count = _queue_urlopen(monkeypatch, [_success_envelope(bad_content), _success_envelope(bad_content)])
+
+    with pytest.raises(SolarUnavailableError):
+        solar_client.analyze_message("테스트 메시지", now=_NOW, purpose=SolarRequestPurpose.NEW_CYCLE)
+
+    assert call_count["n"] == 2
+
+
+def test_analyze_message_never_attempts_a_third_call(monkeypatch):
+    """repair까지 실패해도 3번째(성공할) 응답이 큐에 남아 있으면 절대 소비하지 않는다 —
+    전체 SOLAR 호출은 최대 2회여야 한다는 제약의 직접 증거."""
+    bad_content = _envelope(items=[_pending_field_mismatch_item()])
+    good_content = _envelope(items=[_task_create_item()])
+    call_count = _queue_urlopen(
+        monkeypatch,
+        [_success_envelope(bad_content), _success_envelope(bad_content), _success_envelope(good_content)],
+    )
+
+    with pytest.raises(SolarUnavailableError):
+        solar_client.analyze_message("테스트 메시지", now=_NOW, purpose=SolarRequestPurpose.NEW_CYCLE)
+
+    assert call_count["n"] == 2
+
+
+def test_analyze_message_transport_error_on_first_call_is_not_repaired(monkeypatch):
+    call_count = {"n": 0}
+
+    def _raise(request, timeout=None):
+        call_count["n"] += 1
+        raise urllib.error.URLError("network down")
+
+    monkeypatch.setattr("urllib.request.urlopen", _raise)
+
+    with pytest.raises(SolarUnavailableError):
+        solar_client.analyze_message("테스트 메시지", now=_NOW, purpose=SolarRequestPurpose.NEW_CYCLE)
+
+    assert call_count["n"] == 1  # 전송 계층 오류는 repair를 시도하지 않고 즉시 전파된다.
+
+
+def test_analyze_message_repair_logs_no_sensitive_content(monkeypatch, caplog):
+    bad_content = _envelope(
+        items=[_pending_field_mismatch_item()], analysis_message="이 문장은 로그에 절대 나오면 안 된다"
+    )
+    good_content = _envelope(items=[_task_create_item()])
+    _queue_urlopen(monkeypatch, [_success_envelope(bad_content), _success_envelope(good_content)])
+
+    secret_user_message = "이 사용자 메시지도 로그에 나오면 절대 안 된다"
+    with caplog.at_level(logging.WARNING, logger="app.services.solar_client"):
+        solar_client.analyze_message(secret_user_message, now=_NOW, purpose=SolarRequestPurpose.NEW_CYCLE)
+
+    for record in caplog.records:
+        assert secret_user_message not in record.message
+        assert "이 문장은 로그에 절대 나오면 안 된다" not in record.message
+        assert "몇 분 걸릴까요?" not in record.message
+        assert "Bearer" not in record.message
