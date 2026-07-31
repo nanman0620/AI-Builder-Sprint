@@ -6,7 +6,7 @@ from enum import Enum
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Protocol
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, null, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -1898,7 +1898,13 @@ def _apply_execution_transition_update(
     now: datetime,
 ) -> int:
     """FINAL_REVIEW/FAILED -> EXECUTING 조건부 단일 UPDATE. 상태와 실행 관련 필드를 한 statement
-    에서 함께 바꾼다(DB 명세 20-5절 원문 SQL과 동일한 필드 집합, updated_at 포함)."""
+    에서 함께 바꾼다(DB 명세 20-5절 원문 SQL과 동일한 필드 집합, updated_at 포함).
+
+    execution_result는 반드시 sqlalchemy.null()을 써야 한다 — JSONB 컬럼에 파이썬 None을
+    그대로 넘기면 SQLAlchemy postgresql.JSONB의 기본 none_as_null=False 동작 때문에 SQL NULL이
+    아니라 JSON 리터럴 'null'로 직렬화되어 executing_state_consistency CHECK(execution_result
+    IS NULL)를 위반한다(실제 PostgreSQL E2E에서 확인된 결함, executed_at/error_code/
+    error_message는 JSONB가 아니므로 None 그대로 SQL NULL이 되어 영향이 없다)."""
     stmt = (
         update(SolarRequest)
         .where(
@@ -1911,7 +1917,7 @@ def _apply_execution_transition_update(
             execution_started_at=now,
             execution_attempt_count=SolarRequest.execution_attempt_count + 1,
             executed_at=None,
-            execution_result=None,
+            execution_result=null(),
             error_code=None,
             error_message=None,
             updated_at=now,

@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from typing import Protocol
 
 from fastapi import FastAPI
-from sqlalchemy import select, text, update
+from sqlalchemy import null, select, text, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
@@ -103,7 +103,11 @@ def _execute_locked(session_factory: SessionFactory, request_id: uuid.UUID, exec
 
 def _finalize_as_failed(session_factory: SessionFactory, request_id: uuid.UUID, code: str, message: str) -> None:
     """실제 실행 중 도메인 오류가 발생했을 때만 호출된다. 별도 트랜잭션에서 request만 FAILED로
-    기록한다(DB 명세 20-10절). execution_started_at/execution_attempt_count는 건드리지 않는다."""
+    기록한다(DB 명세 20-10절). execution_started_at/execution_attempt_count는 건드리지 않는다.
+
+    execution_result는 sqlalchemy.null()을 써야 한다 — JSONB 컬럼에 파이썬 None을 그대로 넘기면
+    SQL NULL이 아니라 JSON 리터럴 'null'로 직렬화되어 failed_state_consistency CHECK(
+    execution_result IS NULL)를 위반한다(실제 PostgreSQL E2E에서 확인된 결함)."""
     db = session_factory()
     try:
         with db.begin():
@@ -115,7 +119,7 @@ def _finalize_as_failed(session_factory: SessionFactory, request_id: uuid.UUID, 
                     error_code=code,
                     error_message=message,
                     executed_at=None,
-                    execution_result=None,
+                    execution_result=null(),
                     updated_at=get_current_moment(),
                 )
             )

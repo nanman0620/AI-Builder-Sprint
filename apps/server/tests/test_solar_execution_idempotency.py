@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy.sql.dml import Update
+from sqlalchemy.sql.elements import Null
 
 from app.core.errors import ApiError
 from app.models.enums import SolarRequestPurpose, SolarRequestStatus
@@ -260,6 +261,21 @@ def _value_key_names(stmt) -> set[str]:
     return {key.name if hasattr(key, "name") else str(key) for key in stmt._values.keys()}
 
 
+def _value_for(stmt, column_name: str):
+    """values() 딕셔너리에서 컬럼명으로 실제 바인딩된 값을 찾는다. 일반 값은 BindParameter로
+    감싸이므로 .value를 꺼내 비교하기 쉽게 하고, sqlalchemy.null()의 Null 센티널은 그대로
+    돌려준다(감싸이지 않으므로 isinstance(..., Null) 검사가 그대로 통과해야 한다)."""
+    from sqlalchemy.sql.elements import BindParameter
+
+    for key, value in stmt._values.items():
+        name = key.name if hasattr(key, "name") else str(key)
+        if name == column_name:
+            if isinstance(value, BindParameter):
+                return value.value
+            return value
+    raise AssertionError(f"{column_name}이(가) UPDATE values()에 없다")
+
+
 class _FakeUpdateCaptureSession:
     def __init__(self, rowcount=1):
         self.captured_stmt = None
@@ -298,6 +314,42 @@ def test_apply_execution_transition_update_includes_all_fields_in_one_statement(
     assert "solar_requests.id" in where_sql
     assert "solar_requests.user_id" in where_sql
     assert "solar_requests.status" in where_sql
+
+
+def test_apply_execution_transition_update_execution_result_is_real_sql_null():
+    """회귀 방지: JSONB execution_result에 파이썬 None을 그대로 넘기면 SQLAlchemy
+    postgresql.JSONB의 기본 none_as_null=False 때문에 SQL NULL이 아니라 JSON 리터럴 'null'로
+    직렬화되어 executing_state_consistency CHECK(execution_result IS NULL)를 실제 PostgreSQL에서
+    위반한다(fake session은 이 직렬화·CHECK 제약을 검증하지 못하므로 실제 DB E2E로 최초 발견됨).
+    sqlalchemy.null()을 명시적으로 써서 진짜 SQL NULL 표현식이 되는지만 이 테스트로 확인한다."""
+    db = _FakeUpdateCaptureSession(rowcount=1)
+
+    solar_request_service._apply_execution_transition_update(
+        db, request_id=REQUEST_ID, user_id=USER_ID, required_status=SolarRequestStatus.FINAL_REVIEW, now=NOW
+    )
+
+    stmt = db.captured_stmt
+    execution_result_value = _value_for(stmt, "execution_result")
+    assert isinstance(execution_result_value, Null)
+    assert execution_result_value is not None  # 파이썬 None이 아니라 SQL NULL 표현식이어야 한다
+
+
+def test_apply_execution_transition_update_other_nullable_fields_stay_plain_none():
+    """executed_at/error_code/error_message는 JSONB가 아니므로 파이썬 None 그대로 둬도 SQL
+    NULL이 된다 — null()로 바꿀 필요가 없다는 기존 계약을 고정한다."""
+    db = _FakeUpdateCaptureSession(rowcount=1)
+
+    solar_request_service._apply_execution_transition_update(
+        db, request_id=REQUEST_ID, user_id=USER_ID, required_status=SolarRequestStatus.FINAL_REVIEW, now=NOW
+    )
+
+    stmt = db.captured_stmt
+    assert _value_for(stmt, "executed_at") is None
+    assert _value_for(stmt, "error_code") is None
+    assert _value_for(stmt, "error_message") is None
+    assert _value_for(stmt, "status") == SolarRequestStatus.EXECUTING
+    assert _value_for(stmt, "execution_started_at") == NOW
+    assert _value_for(stmt, "updated_at") == NOW
 
 
 def test_apply_execution_transition_update_where_uses_required_status_for_retry():
@@ -434,11 +486,33 @@ def test_execute_locked_domain_error_finalizes_as_failed_in_separate_transaction
     stmt = factory.update_calls[0]
     value_keys = _value_key_names(stmt)
     assert value_keys == {"status", "error_code", "error_message", "executed_at", "execution_result", "updated_at"}
+    # execution_attempt_count/execution_started_at이 values()에 없다는 것 자체가 "건드리지 않음"의
+    # 증거다 — UPDATE는 명시된 컬럼만 바꾸므로 기존 DB 값이 그대로 유지된다.
     assert "execution_attempt_count" not in value_keys
     assert "execution_started_at" not in value_keys
     # 재조회 세션(1) + FAILED 기록 세션(1), 둘 다 닫힘
     assert len(factory.sessions) == 2
     assert all(session.closed for session in factory.sessions)
+
+
+def test_execute_locked_domain_error_failed_execution_result_is_real_sql_null():
+    """회귀 방지: _finalize_as_failed()도 JSONB execution_result에 sqlalchemy.null()을 써야
+    failed_state_consistency CHECK(execution_result IS NULL)를 실제 PostgreSQL에서 통과한다
+    (fake session은 이 직렬화·CHECK 제약을 검증하지 못하므로 실제 DB E2E로 최초 발견됨)."""
+    request = _make_request(status=SolarRequestStatus.EXECUTING, execution_attempt_count=1)
+    factory = _FakeWorkerSessionFactory(request)
+    executor = _DomainFailingExecutor("PLAN_EXECUTION_FAILED", "실패했어요")
+
+    worker_module._execute_locked(factory, REQUEST_ID, executor)
+
+    stmt = factory.update_calls[0]
+    execution_result_value = _value_for(stmt, "execution_result")
+    assert isinstance(execution_result_value, Null)
+    assert _value_for(stmt, "status") == SolarRequestStatus.FAILED
+    assert _value_for(stmt, "error_code") == "PLAN_EXECUTION_FAILED"
+    assert _value_for(stmt, "error_message") == "실패했어요"
+    assert _value_for(stmt, "executed_at") is None
+    assert _value_for(stmt, "updated_at") is not None
 
 
 def test_execute_locked_generic_exception_does_not_record_failed():
