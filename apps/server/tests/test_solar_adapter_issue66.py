@@ -540,3 +540,222 @@ def test_missing_order_for_create_merge_includes_title_and_excludes_remaining_mi
 def test_missing_order_for_plain_create_excludes_title():
     order = solar_client.missing_order_for("TASK", "CREATE")
     assert "title" not in order
+
+
+# ---------------------------------------------------------------------------
+# Issue #66 후속 — CHANGE_INPUT 실제 API smoke test에서 관측된 3가지 위반에 대한 좁은
+# canonicalization. 각각 "보완해야 하는 좁은 조건"과 "건드리면 안 되는 조건(=repair 대상으로
+# 남아야 함)"을 짝으로 검증한다.
+# ---------------------------------------------------------------------------
+
+
+def test_canonicalize_missing_deadline_state_for_create_merge_fills_when_untouched_and_null():
+    item = {
+        "action": "CREATE",
+        "changedFields": ["estimatedMinutes"],
+        "normalizedPayload": {"deadlineAt": None, "title": None},
+    }
+    solar_client._canonicalize_missing_deadline_state_for_create_merge(item)
+    assert item["deadlineState"] == "MISSING"
+
+
+def test_canonicalize_missing_deadline_state_for_create_merge_no_op_when_key_already_present():
+    """이미 값이 있으면(잘못된 값이라도) 건드리지 않는다 — strict parser/repair 대상."""
+    item = {
+        "action": "CREATE",
+        "deadlineState": "KNOWN",
+        "changedFields": ["estimatedMinutes"],
+        "normalizedPayload": {"deadlineAt": None},
+    }
+    solar_client._canonicalize_missing_deadline_state_for_create_merge(item)
+    assert item["deadlineState"] == "KNOWN"
+
+
+def test_canonicalize_missing_deadline_state_for_create_merge_no_op_when_deadline_at_is_changed():
+    """사용자가 실제로 마감을 바꾸려는 경우(deadlineAt이 changedFields에 있음)는 임의 보완하지
+    않고 계약 위반으로 남긴다."""
+    item = {
+        "action": "CREATE",
+        "changedFields": ["deadlineAt"],
+        "normalizedPayload": {"deadlineAt": None},
+    }
+    solar_client._canonicalize_missing_deadline_state_for_create_merge(item)
+    assert "deadlineState" not in item
+
+
+def test_canonicalize_missing_deadline_state_for_create_merge_no_op_when_deadline_at_has_value():
+    """deadlineAt이 null이 아닌데 deadlineState 키가 없으면(값을 추측할 근거가 없음) 건드리지
+    않는다."""
+    item = {
+        "action": "CREATE",
+        "changedFields": ["estimatedMinutes"],
+        "normalizedPayload": {"deadlineAt": "2026-08-01T23:59:59+09:00"},
+    }
+    solar_client._canonicalize_missing_deadline_state_for_create_merge(item)
+    assert "deadlineState" not in item
+
+
+def test_canonicalize_missing_deadline_state_for_create_merge_no_op_for_plain_create():
+    """changedFields 키 자체가 없는 완전히 새로운 CREATE는 건드리지 않는다(그 경우
+    deadlineState 누락은 값을 추측할 안전한 근거가 없는 진짜 계약 위반)."""
+    item = {"action": "CREATE", "normalizedPayload": {"deadlineAt": None}}
+    solar_client._canonicalize_missing_deadline_state_for_create_merge(item)
+    assert "deadlineState" not in item
+
+
+def test_canonicalize_new_create_target_entity_id_nulls_when_no_request_item_signal():
+    item = {"action": "CREATE", "targetKind": None, "targetEntityId": "some-id"}
+    solar_client._canonicalize_new_create_target_entity_id(item)
+    assert item["targetEntityId"] is None
+
+
+def test_canonicalize_new_create_target_entity_id_no_op_when_target_kind_request_item():
+    item = {"action": "CREATE", "targetKind": "REQUEST_ITEM", "targetEntityId": "some-id"}
+    solar_client._canonicalize_new_create_target_entity_id(item)
+    assert item["targetEntityId"] == "some-id"
+
+
+def test_canonicalize_new_create_target_entity_id_no_op_when_changed_fields_present():
+    """targetKind는 없지만 changedFields가 있으면(REQUEST_ITEM 수정 의도가 있을 수 있음)
+    건드리지 않는다."""
+    item = {"action": "CREATE", "changedFields": ["title"], "targetEntityId": "some-id"}
+    solar_client._canonicalize_new_create_target_entity_id(item)
+    assert item["targetEntityId"] == "some-id"
+
+
+def test_canonicalize_new_create_target_entity_id_no_op_when_already_null():
+    item = {"action": "CREATE", "targetKind": None, "targetEntityId": None}
+    solar_client._canonicalize_new_create_target_entity_id(item)
+    assert item["targetEntityId"] is None
+
+
+def test_canonicalize_new_create_target_entity_id_no_op_for_non_create_action():
+    item = {"action": "UPDATE", "targetKind": None, "targetEntityId": "some-id"}
+    solar_client._canonicalize_new_create_target_entity_id(item)
+    assert item["targetEntityId"] == "some-id"
+
+
+def test_canonicalize_missing_remaining_minutes_fills_for_create():
+    item = {"action": "CREATE", "normalizedPayload": {"title": "T"}}
+    solar_client._canonicalize_missing_remaining_minutes(item)
+    assert item["normalizedPayload"]["remainingMinutes"] is None
+
+
+def test_canonicalize_missing_remaining_minutes_fills_for_update_when_untouched():
+    item = {
+        "action": "UPDATE",
+        "updateFields": ["title"],
+        "normalizedPayload": {"title": "T"},
+    }
+    solar_client._canonicalize_missing_remaining_minutes(item)
+    assert item["normalizedPayload"]["remainingMinutes"] is None
+
+
+def test_canonicalize_missing_remaining_minutes_no_op_when_update_field_targets_it():
+    """remainingMinutes를 실제로 바꾸려는 UPDATE에서 키가 없으면 계약 위반으로 남긴다."""
+    item = {
+        "action": "UPDATE",
+        "updateFields": ["remainingMinutes"],
+        "normalizedPayload": {"title": "T"},
+    }
+    solar_client._canonicalize_missing_remaining_minutes(item)
+    assert "remainingMinutes" not in item["normalizedPayload"]
+
+
+def test_canonicalize_missing_remaining_minutes_no_op_when_key_already_present():
+    item = {"action": "CREATE", "normalizedPayload": {"remainingMinutes": 30}}
+    solar_client._canonicalize_missing_remaining_minutes(item)
+    assert item["normalizedPayload"]["remainingMinutes"] == 30
+
+
+def test_canonicalize_missing_remaining_minutes_no_op_for_delete():
+    item = {"action": "DELETE", "normalizedPayload": {"title": "T"}}
+    solar_client._canonicalize_missing_remaining_minutes(item)
+    assert "remainingMinutes" not in item["normalizedPayload"]
+
+
+# ---------------------------------------------------------------------------
+# 위 3가지가 실제로 _canonicalize_response_content 파이프라인을 통해 적용되고, strict
+# parser를 통과시키는지 end-to-end로 확인한다.
+# ---------------------------------------------------------------------------
+
+
+def test_canonicalize_response_content_fixes_create_merge_missing_keys_end_to_end():
+    body = {
+        "analysisMessage": "분석 완료",
+        "items": [
+            {
+                "entityType": "TASK",
+                "action": "CREATE",
+                "targetEntityId": REQUEST_ITEM_ID,
+                "targetKind": "REQUEST_ITEM",
+                "rawLineText": "예상 시간을 2시간으로",
+                "changedFields": ["estimatedMinutes"],
+                "normalizedPayload": {
+                    "title": None,
+                    "deadlineAt": None,
+                    "estimatedMinutes": 120,
+                    "estimatedMinutesSource": "USER",
+                    "amountText": None,
+                    "amountSource": None,
+                },
+                "pendingQuestion": None,
+            }
+        ],
+        "unresolvedLine": None,
+    }
+    canonicalized = solar_client._canonicalize_response_content(json.dumps(body, ensure_ascii=False))
+    result = parse_solar_response(
+        canonicalized,
+        purpose=SolarRequestPurpose.ACTIVE_CYCLE,
+        candidate_task_ids=set(),
+        candidate_fixed_schedule_ids=set(),
+        analysis_mode="CHANGE_INPUT",
+        candidate_request_items={REQUEST_ITEM_ID: {"entityType": "TASK", "action": "CREATE"}},
+    )
+    assert len(result.items) == 1
+    item = result.items[0]
+    assert item.action == "CREATE"
+    assert item.target_kind == "REQUEST_ITEM"
+    # remainingMinutes를 estimatedMinutes와 동기화하는 건 서비스 계층(`_apply_create_merge_patch`)
+    # 책임이라 파서 단계에서는 canonicalization이 채운 null 그대로 통과한다.
+    assert item.normalized_payload["remainingMinutes"] is None
+
+
+def test_canonicalize_response_content_still_rejects_when_user_actually_changes_deadline():
+    """deadlineAt이 changedFields에 있는데 deadlineState가 없으면 canonicalization 후에도
+    여전히 거부돼야 한다(임의 보완 금지 확인)."""
+    body = {
+        "analysisMessage": "분석 완료",
+        "items": [
+            {
+                "entityType": "TASK",
+                "action": "CREATE",
+                "targetEntityId": REQUEST_ITEM_ID,
+                "targetKind": "REQUEST_ITEM",
+                "rawLineText": "마감을 8월 1일로",
+                "changedFields": ["deadlineAt"],
+                "normalizedPayload": {
+                    "title": None,
+                    "deadlineAt": "2026-08-01T23:59:59+09:00",
+                    "estimatedMinutes": None,
+                    "estimatedMinutesSource": None,
+                    "remainingMinutes": None,
+                    "amountText": None,
+                    "amountSource": None,
+                },
+                "pendingQuestion": None,
+            }
+        ],
+        "unresolvedLine": None,
+    }
+    canonicalized = solar_client._canonicalize_response_content(json.dumps(body, ensure_ascii=False))
+    with pytest.raises(SolarUnavailableError):
+        parse_solar_response(
+            canonicalized,
+            purpose=SolarRequestPurpose.ACTIVE_CYCLE,
+            candidate_task_ids=set(),
+            candidate_fixed_schedule_ids=set(),
+            analysis_mode="CHANGE_INPUT",
+            candidate_request_items={REQUEST_ITEM_ID: {"entityType": "TASK", "action": "CREATE"}},
+        )

@@ -1097,7 +1097,11 @@ def _validate_card_answer_field_value(
 
 # ---------------------------------------------------------------------------
 # canonicalization — strict parser 앞단에서 좁은 whitelist 조건에만 정확히 일치하는 값을
-# 정규화한다. 아래 3가지 조건 밖의 값은 절대 임의로 보정하지 않는다(fuzzy mapping 금지).
+# 정규화한다. 아래 조건들 밖의 값은 절대 임의로 보정하지 않는다(fuzzy mapping 금지).
+# Issue #66 CHANGE_INPUT 실제 API smoke test에서 관측된 3가지 위반(TASK CREATE+REQUEST_ITEM
+# merge item의 deadlineState 키 누락, 새 CREATE의 불필요한 targetEntityId, TASK
+# normalizedPayload의 remainingMinutes 키 누락)에 대해서만 추가로 좁게 정규화한다 — strict
+# parser의 검증 로직 자체는 이 3가지를 포함해 어디에서도 완화하지 않는다.
 # ---------------------------------------------------------------------------
 
 
@@ -1150,6 +1154,71 @@ def _canonicalize_update_field_amount_text_alias(item: dict) -> None:
     item["updateFields"] = canonical
 
 
+def _canonicalize_missing_deadline_state_for_create_merge(item: dict) -> None:
+    """CHANGE_INPUT의 CREATE+REQUEST_ITEM merge item(changedFields가 있는 CREATE)에서
+    deadlineState 키 자체가 없고, deadlineAt이 changedFields에 없어(이번에 안 건드림)
+    normalizedPayload.deadlineAt도 이미 null인 경우에만 deadlineState="MISSING"을 채운다.
+
+    deadlineState 키가 이미 있으면(값이 잘못됐더라도) 절대 건드리지 않는다 — 그건 strict
+    parser·repair 대상이다. deadlineAt이 changedFields에 있으면(사용자가 실제로 마감을
+    바꾸려는 의도) 새 값을 추측할 안전한 근거가 없어 역시 건드리지 않는다.
+    """
+    if item.get("action") != "CREATE":
+        return
+    if "deadlineState" in item:
+        return
+    changed_fields = item.get("changedFields")
+    if not isinstance(changed_fields, list) or "deadlineAt" in changed_fields:
+        return
+    payload = item.get("normalizedPayload")
+    if not isinstance(payload, dict) or payload.get("deadlineAt") is not None:
+        return
+    item["deadlineState"] = "MISSING"
+
+
+def _canonicalize_new_create_target_entity_id(item: dict) -> None:
+    """CHANGE_INPUT의 완전히 새로운 CREATE(targetKind가 없거나 null이고 changedFields도 없어
+    REQUEST_ITEM 수정 의도를 나타내는 키가 전혀 없는 경우)인데 targetEntityId가 불필요하게
+    채워져 있으면 null로 정규화한다.
+
+    targetKind="REQUEST_ITEM"이거나 changedFields 키가 있으면(REQUEST_ITEM 수정 의도가 있을
+    수 있으면) 절대 건드리지 않는다 — canonicalization은 candidateRequestItems 후보 목록에
+    접근할 수 없어 그 targetEntityId가 실제 후보와 연결되는지 스스로 판단할 수 없으므로, 이런
+    신호가 조금이라도 있으면 strict parser·repair 대상으로 남긴다.
+    """
+    if item.get("action") != "CREATE":
+        return
+    if item.get("targetKind") is not None:
+        return
+    if "changedFields" in item:
+        return
+    if item.get("targetEntityId") is None:
+        return
+    item["targetEntityId"] = None
+
+
+def _canonicalize_missing_remaining_minutes(item: dict) -> None:
+    """TASK item(CREATE 또는 UPDATE)의 normalizedPayload에 remainingMinutes 키 자체가 없을
+    때만 null로 채운다.
+
+    CREATE(신규든 REQUEST_ITEM merge든)는 remainingMinutes가 서버가 항상 estimatedMinutes에서
+    다시 계산해 덮어쓰는 파생값이라 무조건 null로 채워도 안전하다. UPDATE는 remainingMinutes가
+    updateFields에 없을 때(이번 요청에서 안 건드림)만 null로 채우고, updateFields에 있는데
+    (실제로 값을 바꾸려는데) 키 자체가 없으면 새 값을 추측할 근거가 없어 계약 위반으로 남긴다.
+    """
+    action = item.get("action")
+    if action not in ("CREATE", "UPDATE"):
+        return
+    payload = item.get("normalizedPayload")
+    if not isinstance(payload, dict) or "remainingMinutes" in payload:
+        return
+    if action == "UPDATE":
+        update_fields = item.get("updateFields")
+        if not isinstance(update_fields, list) or "remainingMinutes" in update_fields:
+            return
+    payload["remainingMinutes"] = None
+
+
 def _canonicalize_response_dict(raw: dict) -> dict:
     items = raw.get("items")
     if not isinstance(items, list):
@@ -1165,15 +1234,19 @@ def _canonicalize_response_dict(raw: dict) -> dict:
         if item.get("action") == "UPDATE":
             _canonicalize_untouched_deadline_state(item)
             _canonicalize_update_field_amount_text_alias(item)
+        elif item.get("action") == "CREATE":
+            _canonicalize_missing_deadline_state_for_create_merge(item)
+            _canonicalize_new_create_target_entity_id(item)
+        _canonicalize_missing_remaining_minutes(item)
     return raw
 
 
 def _canonicalize_response_content(content: str) -> str:
-    """strict parser에 넘기기 전 좁은 whitelist 3가지만 정규화하는 pre-pass.
+    """strict parser에 넘기기 전 좁은 whitelist 조건들만 정규화하는 pre-pass.
 
     JSON이 아니거나 최상위가 dict가 아니면 그대로 반환해 `parse_solar_response`가 원래
-    에러를 내도록 둔다(canonicalization이 파싱 자체를 대신하지 않는다). 정의된 3가지 조건
-    밖의 값은 이 함수도, 이 함수가 호출하는 어떤 헬퍼도 보정하지 않는다.
+    에러를 내도록 둔다(canonicalization이 파싱 자체를 대신하지 않는다). 정의된 조건들 밖의
+    값은 이 함수도, 이 함수가 호출하는 어떤 헬퍼도 보정하지 않는다.
     """
     try:
         raw = json.loads(content)
