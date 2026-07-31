@@ -1764,8 +1764,81 @@ def call_solar(payload: dict) -> str:
     return content
 
 
+def _build_change_input_repair_context(content: str, violation: SolarUnavailableError) -> str:
+    """Return schema-only repair facts. Never include IDs, user text, or payload values."""
+    facts = [f"safe violation code: {violation.code}"]
+    try:
+        raw = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return "\n".join([*facts, "top-level response must be a JSON object"])
+    if not isinstance(raw, dict):
+        return "\n".join([*facts, f"actual top-level type: {type(raw).__name__}"])
+    facts.append(f"expected top-level exact keys: {sorted(_CHANGE_INPUT_TOP_LEVEL_KEYS)}")
+    facts.append(f"actual top-level keys: {sorted(raw)}")
+    operations = raw.get("operations")
+    unresolved = raw.get("unresolvedOperation")
+    if isinstance(operations, list) and operations:
+        operation = operations[0]
+        facts.append("operation index: 0")
+        if isinstance(operation, dict):
+            operation_type = operation.get("operationType")
+            facts.append(f"operationType: {operation_type if isinstance(operation_type, str) else 'invalid type'}")
+            key_sets = {
+                "ADD": _CHANGE_ADD_KEYS,
+                "PATCH_REQUEST_ITEM": _CHANGE_PATCH_ITEM_KEYS,
+                "DELETE_REQUEST_ITEM": _CHANGE_DELETE_ITEM_KEYS,
+                "UPDATE_ENTITY": _CHANGE_UPDATE_ENTITY_KEYS,
+                "DELETE_ENTITY": _CHANGE_DELETE_ENTITY_KEYS,
+            }
+            expected_keys = key_sets.get(operation_type)
+            if expected_keys is not None:
+                facts.append(f"expected exact keys: {sorted(expected_keys)}")
+            facts.append(f"actual keys: {sorted(operation)}")
+            entity_type = operation.get("entityType")
+            if operation_type == "PATCH_REQUEST_ITEM":
+                mapping = _CHANGE_TASK_FIELD_KEYS if entity_type == "TASK" else _CHANGE_FS_FIELD_KEYS
+                facts.append("candidate namespace: REQUEST_ITEM")
+                fields = operation.get("changedFields")
+            elif operation_type == "UPDATE_ENTITY":
+                mapping = _CHANGE_TASK_ENTITY_FIELD_KEYS if entity_type == "TASK" else _CHANGE_FS_FIELD_KEYS
+                facts.append("candidate namespace: ENTITY")
+                fields = operation.get("updateFields")
+            else:
+                mapping = None
+                fields = None
+            if mapping is not None:
+                facts.append(f"allowed logical fields: {sorted(mapping)}")
+                if isinstance(fields, list):
+                    safe_fields = [field for field in fields if isinstance(field, str)]
+                    facts.append(f"actual logical fields: {safe_fields}")
+                    if safe_fields and all(field in mapping for field in safe_fields):
+                        required = sorted(set().union(*(mapping[field] for field in safe_fields)))
+                        facts.append(f"required patch storage keys: {required}")
+                    else:
+                        facts.append("required patch storage keys: derive only after removing invalid logical fields")
+            if operation_type == "ADD":
+                facts.append("ADD rule: unresolvedOperation must be null; requestItemId and targetEntityId are forbidden")
+            if operation_type in ("DELETE_REQUEST_ITEM", "DELETE_ENTITY"):
+                facts.append("DELETE rule: emit exactly the three expected keys and no others")
+    elif isinstance(unresolved, dict):
+        facts.extend([
+            "operation index: none (unresolvedOperation branch)",
+            f"unresolved exact keys: {sorted(_CHANGE_UNRESOLVED_KEYS)}",
+            f"actual unresolved keys: {sorted(unresolved)}",
+            f"intendedOperation enum: {unresolved.get('intendedOperation') if isinstance(unresolved.get('intendedOperation'), str) else 'invalid type'}",
+            f"targetKind enum: {unresolved.get('targetKind') if isinstance(unresolved.get('targetKind'), str) else 'invalid type'}",
+            "allowed unresolved pairs: PATCH_REQUEST_ITEM+REQUEST_ITEM, DELETE_REQUEST_ITEM+REQUEST_ITEM, UPDATE_ENTITY+ENTITY, DELETE_ENTITY+ENTITY",
+            "ADD rule: ADD is never unresolved; return an ADD operation even when fields are missing",
+        ])
+    return "\n".join(facts)
+
+
 def _build_repair_messages(
-    original_messages: list[dict], first_response_content: str, violation_code: str
+    original_messages: list[dict],
+    first_response_content: str,
+    violation_code: str,
+    *,
+    change_input_context: str | None = None,
 ) -> list[dict]:
     """기존 대화 컨텍스트(system+user) + 직전 응답 + 교정 요청 한 턴으로 repair 프롬프트를
     만든다. `violation_code`는 우리 스키마 키 이름·정적 문자열로만 구성돼 SOLAR가 자유
@@ -1776,6 +1849,19 @@ def _build_repair_messages(
         " 규칙)을 다시 확인하고, 직전 응답을 완전히 대체하는 올바른 JSON 하나만 다시"
         " 출력하세요. 설명·마크다운·코드블록 없이 JSON 객체만 응답하세요."
     )
+    if change_input_context is not None:
+        repair_instruction = (
+            "Rewrite the entire JSON object from scratch. Do not copy the previous operation selection unchanged. "
+            "Return JSON only, with no prose, markdown, or code fence. analysisMessage must be a nonblank string. "
+            "Use the exact top-level keys analysisMessage, operations, unresolvedOperation. Re-run SECTION 1 "
+            "DECIDE OPERATION before building JSON; do not preserve a previous unresolved choice. Apply the "
+            "logical-to-storage mapping, candidate namespace rules, and exact key sets. A clear request-item "
+            "deletion with one matching REQUEST_ITEM candidate must remain DELETE_REQUEST_ITEM. Do not change "
+            "deletion intent into ADD, PATCH_REQUEST_ITEM, or UPDATE_ENTITY. Rewrite DELETE_REQUEST_ITEM with "
+            "exactly operationType, requestItemId, entityType. Remove pendingQuestion and every other extra key. "
+            "For ADD, unresolvedOperation is forbidden. For DELETE, every key beyond its exact three keys is forbidden.\n"
+            f"SAFE CONTRACT CONTEXT (contains no user values or IDs):\n{change_input_context}"
+        )
     return [
         *original_messages,
         {"role": "assistant", "content": first_response_content},
@@ -1788,6 +1874,7 @@ def _call_and_parse_with_repair(
     parse_fn: Callable[[str], _T],
     *,
     canonicalize_fn: Callable[[str], str] = _canonicalize_response_content,
+    repair_context_fn: Callable[[str, SolarUnavailableError], str] | None = None,
 ) -> _T:
     """`call_solar` → canonicalize → `parse_fn` → (계약 위반 시) 최대 1회 repair → canonicalize →
     `parse_fn` 순서를 모든 analyze_* 진입점이 공유하는 helper. `call_solar`는 이 함수 안에서
@@ -1801,9 +1888,12 @@ def _call_and_parse_with_repair(
         return parse_fn(canonical_content)
     except SolarUnavailableError as first_violation:
         violation_code = first_violation.code
+        repair_context = repair_context_fn(content, first_violation) if repair_context_fn is not None else None
 
     logger.warning("SOLAR_REPAIR_ATTEMPT code=%s", violation_code)
-    repair_messages = _build_repair_messages(messages, content, violation_code)
+    repair_messages = _build_repair_messages(
+        messages, content, violation_code, change_input_context=repair_context
+    )
     repair_content = call_solar({"messages": repair_messages})
     canonical_repair_content = canonicalize_fn(repair_content)
     return parse_fn(canonical_repair_content)
@@ -2136,24 +2226,68 @@ def _build_change_input_operation_prompt_messages(
         "candidateTasks": candidate_tasks,
         "candidateFixedSchedules": candidate_fixed_schedules,
         "candidateRequestItems": candidate_request_items,
+        "candidateRequestItemCount": len(candidate_request_items),
+        "candidateTaskCount": len(candidate_tasks),
+        "candidateFixedScheduleCount": len(candidate_fixed_schedules),
+        "totalEntityCandidateCount": len(candidate_tasks) + len(candidate_fixed_schedules),
     }
-    system_prompt = """You analyze a user's CHANGE_INPUT request. Return one JSON object only.
-The exact top-level keys are analysisMessage, operations, unresolvedOperation. Exactly one of these is populated:
-operations is a non-empty array and unresolvedOperation is null, or operations is [] and unresolvedOperation is an object.
-Allowed operationType values are ADD, PATCH_REQUEST_ITEM, DELETE_REQUEST_ITEM, UPDATE_ENTITY, DELETE_ENTITY.
-ADD exact keys: operationType, entityType, rawLineText, payload, pendingQuestion.
-PATCH_REQUEST_ITEM exact keys: operationType, requestItemId, entityType, changedFields, patch, pendingQuestion.
-DELETE_REQUEST_ITEM exact keys: operationType, requestItemId, entityType.
-UPDATE_ENTITY exact keys: operationType, targetEntityId, entityType, updateFields, patch, pendingQuestion.
-DELETE_ENTITY exact keys: operationType, targetEntityId, entityType.
-TASK ADD payload exact keys: title, deadlineAt, deadlineState, estimatedMinutes, estimatedMinutesSource, amountText, amountSource.
-FIXED_SCHEDULE ADD payload exact keys: title, startAt, endAt.
-For PATCH/UPDATE return only changed storage keys in patch. Logical mappings are title:title; deadlineAt:deadlineAt+deadlineState; estimatedMinutes:estimatedMinutes+estimatedMinutesSource; amount:amountText+amountSource; startAt:startAt; endAt:endAt. UPDATE_ENTITY TASK additionally permits remainingMinutes:remainingMinutes.
-PATCH_REQUEST_ITEM may identify only a CREATE candidateRequestItem. Entity operations may identify only candidateTasks/candidateFixedSchedules. Never mix ID namespaces. Never emit remainingMinutes for ADD or PATCH_REQUEST_ITEM.
-pendingQuestion is null, or exact keys field, message, attemptCount. unresolvedOperation exact keys are intendedOperation, targetKind, entityType, rawLineText, message. PATCH_REQUEST_ITEM/DELETE_REQUEST_ITEM use REQUEST_ITEM; UPDATE_ENTITY/DELETE_ENTITY use ENTITY. Do not return candidate IDs inside unresolvedOperation.
-Do not emit two operations for the same request item or entity. Unknown or additional keys are forbidden."""
+    decide_prompt = """You analyze a user's CHANGE_INPUT request. Return exactly one JSON object without prose, markdown, or a code fence.
+
+SECTION 1 — DECIDE OPERATION
+First decide the operation. Do not choose a JSON shape before deciding the operation.
+1. New Task or FixedSchedule creation intent -> ADD. Do not select an existing candidate. ADD applies when the candidate count is zero and when fields are missing. Missing values use null values and pendingQuestion; they are not target ambiguity. unresolvedOperation is forbidden.
+2. Modify an existing unexecuted request item whose action is CREATE -> PATCH_REQUEST_ITEM.
+3. Cancel or remove an existing request item -> DELETE_REQUEST_ITEM. If intent, REQUEST_ITEM namespace, and entityType filtering leave exactly one matching candidateRequestItem, it must be DELETE_REQUEST_ITEM; select it directly and do not ask a confirmation question. unresolvedOperation is forbidden. Do not change this deletion into ADD, PATCH_REQUEST_ITEM, or UPDATE_ENTITY.
+4. Modify a real existing Task or FixedSchedule -> UPDATE_ENTITY.
+5. Mark a real existing Task or FixedSchedule for deletion -> DELETE_ENTITY.
+6. unresolvedOperation is the last resort, only for modifying or deleting an existing target when intent, namespace, and entityType filtering still leave two or more matching existing targets that the user cannot distinguish. It is forbidden for ADD, missing fields, zero matching candidates, or one matching candidate.
+Allowed unresolved pairs: PATCH_REQUEST_ITEM + REQUEST_ITEM; DELETE_REQUEST_ITEM + REQUEST_ITEM; UPDATE_ENTITY + ENTITY; DELETE_ENTITY + ENTITY."""
+
+    build_prompt = """SECTION 3 — BUILD EXACT JSON
+Only after deciding the operation, build its exact JSON shape.
+Top-level exact keys: analysisMessage, operations, unresolvedOperation. analysisMessage must be a nonblank string; null is forbidden. Use either a non-empty operations array with unresolvedOperation null, or operations [] with one unresolvedOperation object.
+
+EXACT OPERATION KEYS
+ADD: operationType, entityType, rawLineText, payload, pendingQuestion.
+PATCH_REQUEST_ITEM: operationType, requestItemId, entityType, changedFields, patch, pendingQuestion.
+DELETE_REQUEST_ITEM: operationType, requestItemId, entityType.
+UPDATE_ENTITY: operationType, targetEntityId, entityType, updateFields, patch, pendingQuestion.
+DELETE_ENTITY: operationType, targetEntityId, entityType.
+TASK ADD payload: title, deadlineAt, deadlineState, estimatedMinutes, estimatedMinutesSource, amountText, amountSource.
+FIXED_SCHEDULE ADD payload: title, startAt, endAt.
+Unknown, additional, or omitted keys are forbidden. ADD has no target ID or remainingMinutes. DELETE_REQUEST_ITEM has exactly operationType, requestItemId, entityType and never has pendingQuestion, payload, patch, changedFields, updateFields, deadlineState, or targetEntityId. DELETE_ENTITY also has exactly its three listed keys.
+
+LOGICAL FIELDS AND STORAGE KEYS
+PATCH_REQUEST_ITEM TASK logical fields: title, deadlineAt, estimatedMinutes, amount.
+UPDATE_ENTITY TASK logical fields: title, deadlineAt, estimatedMinutes, remainingMinutes, amount.
+FIXED_SCHEDULE logical fields: title, startAt, endAt.
+Storage mapping: title -> title; deadlineAt -> deadlineAt, deadlineState; estimatedMinutes -> estimatedMinutes, estimatedMinutesSource; remainingMinutes -> remainingMinutes; amount -> amountText, amountSource; startAt -> startAt; endAt -> endAt.
+changedFields/updateFields contain only logical fields. patch contains exactly their mapped storage keys and no untouched fields. Never put estimatedMinutesSource or amountSource in changedFields/updateFields. remainingMinutes is forbidden for ADD and PATCH_REQUEST_ITEM. A non-null estimatedMinutes requires source USER or AI_ESTIMATED.
+
+PENDING QUESTION
+pendingQuestion is null or an object with exact keys field, message, attemptCount. pendingQuestion is allowed as an object only when at least one field is missing. field is the canonical first missing field, message is nonblank, and attemptCount must be an integer >= 1. If nothing is missing, pendingQuestion must be null.
+
+FULL ENVELOPE EXAMPLE 1 — COMPLETE ADD
+{"analysisMessage":"Added.","operations":[{"operationType":"ADD","entityType":"TASK","rawLineText":"new task","payload":{"title":"report","deadlineAt":"2026-08-07T17:00:00+09:00","deadlineState":"KNOWN","estimatedMinutes":45,"estimatedMinutesSource":"USER","amountText":"1 page","amountSource":"USER"},"pendingQuestion":null}],"unresolvedOperation":null}
+
+FULL ENVELOPE EXAMPLE 2 — MISSING ADD
+{"analysisMessage":"I need one detail.","operations":[{"operationType":"ADD","entityType":"TASK","rawLineText":"new task","payload":{"title":"report","deadlineAt":null,"deadlineState":"MISSING","estimatedMinutes":null,"estimatedMinutesSource":null,"amountText":null,"amountSource":null},"pendingQuestion":{"field":"deadlineAt","message":"When is the deadline?","attemptCount":1}}],"unresolvedOperation":null}
+
+FULL ENVELOPE EXAMPLE 3 — SINGLE-CANDIDATE DELETE_REQUEST_ITEM
+{"analysisMessage":"Removed the request item.","operations":[{"operationType":"DELETE_REQUEST_ITEM","requestItemId":"22222222-2222-2222-2222-222222222222","entityType":"TASK"}],"unresolvedOperation":null}
+
+Use IDs exactly as supplied. Never invent an ID, mix REQUEST_ITEM and ENTITY namespaces, or emit duplicate target operations. unresolvedOperation exact keys are intendedOperation, targetKind, entityType, rawLineText, message; it contains no candidate ID."""
     return [
-        {"role": "system", "content": f"{system_prompt}\n\nContext:\n{json.dumps(context, ensure_ascii=False)}"},
+        {
+            "role": "system",
+            "content": (
+                f"{decide_prompt}\n\nSECTION 2 — CANDIDATE FACTS\n"
+                f"{json.dumps(context, ensure_ascii=False)}\n\n"
+                "Counts and arrays are server-provided facts, not guesses. A namespace with count 0 cannot supply "
+                "an ID. Never invent a candidate ID. A single matching candidate is not ambiguous.\n\n"
+                f"{build_prompt}"
+            ),
+        },
         {"role": "user", "content": message},
     ]
 
@@ -2200,4 +2334,9 @@ def analyze_change_input(
             candidate_request_items=candidate_request_items,
         )
 
-    return _call_and_parse_with_repair(messages, _parse, canonicalize_fn=_identity_canonicalize)
+    return _call_and_parse_with_repair(
+        messages,
+        _parse,
+        canonicalize_fn=_identity_canonicalize,
+        repair_context_fn=_build_change_input_repair_context,
+    )

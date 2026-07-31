@@ -1,4 +1,5 @@
 import json
+import inspect
 
 import pytest
 
@@ -150,3 +151,176 @@ def test_change_input_repair_uses_same_strict_parser_and_only_one_retry(monkeypa
                                                purpose=solar_client.SolarRequestPurpose.ACTIVE_CYCLE)
     assert len(calls) == 2
     assert result.operations[0].operation_type.value == "ADD"
+
+
+def _change_input_system_prompt():
+    return solar_client._build_change_input_operation_prompt_messages(
+        "message",
+        now=solar_client.datetime.now(solar_client._SEOUL_TZ),
+        cycle_start=None,
+        cycle_end=None,
+        candidate_tasks=[],
+        candidate_fixed_schedules=[],
+        candidate_request_items=[],
+    )[0]["content"]
+
+
+def test_change_input_prompt_contains_operation_decision_table_and_add_boundary():
+    prompt = _change_input_system_prompt()
+    assert "SECTION 1 — DECIDE OPERATION" in prompt
+    assert "First decide the operation. Do not choose a JSON shape before deciding the operation." in prompt
+    assert "New Task or FixedSchedule" in prompt
+    assert "missing fields" in prompt
+    assert "exactly one matching candidateRequestItem" in prompt
+    assert "two or more matching existing targets" in prompt
+    for pair in (
+        "PATCH_REQUEST_ITEM + REQUEST_ITEM",
+        "DELETE_REQUEST_ITEM + REQUEST_ITEM",
+        "UPDATE_ENTITY + ENTITY",
+        "DELETE_ENTITY + ENTITY",
+    ):
+        assert pair in prompt
+
+
+def test_change_input_prompt_has_strict_logical_to_storage_mapping():
+    prompt = _change_input_system_prompt()
+    assert "PATCH_REQUEST_ITEM TASK logical fields: title, deadlineAt, estimatedMinutes, amount" in prompt
+    assert "UPDATE_ENTITY TASK logical fields: title, deadlineAt, estimatedMinutes, remainingMinutes, amount" in prompt
+    assert "estimatedMinutes -> estimatedMinutes, estimatedMinutesSource" in prompt
+    assert "Never put estimatedMinutesSource or amountSource in changedFields/updateFields" in prompt
+
+
+def test_change_input_prompt_examples_preserve_exact_operation_shapes():
+    prompt = _change_input_system_prompt()
+    assert "FULL ENVELOPE EXAMPLE 1 — COMPLETE ADD" in prompt
+    assert "FULL ENVELOPE EXAMPLE 2 — MISSING ADD" in prompt
+    assert "FULL ENVELOPE EXAMPLE 3 — SINGLE-CANDIDATE DELETE_REQUEST_ITEM" in prompt
+    assert '"operations":[{"operationType":"ADD","entityType":"TASK","rawLineText":"new task"' in prompt
+    assert '"operations":[{"operationType":"DELETE_REQUEST_ITEM","requestItemId":"22222222-2222-2222-2222-222222222222","entityType":"TASK"}]' in prompt
+    add_examples = [line for line in prompt.splitlines() if '"operationType":"ADD"' in line]
+    assert add_examples
+    assert all("requestItemId" not in line and "targetEntityId" not in line and "remainingMinutes" not in line for line in add_examples)
+    assert all('"unresolvedOperation":null' in line for line in add_examples)
+    assert len([line for line in prompt.splitlines() if "EXAMPLE" in line]) == 3
+
+
+def test_change_input_delete_contract_is_exact_and_has_no_pending_question():
+    prompt = _change_input_system_prompt()
+    delete_example = prompt.split(
+        "FULL ENVELOPE EXAMPLE 3 — SINGLE-CANDIDATE DELETE_REQUEST_ITEM\n", 1
+    )[1].split("\n\n", 1)[0]
+    envelope = json.loads(delete_example)
+    operation = envelope["operations"][0]
+    assert set(operation) == {"operationType", "requestItemId", "entityType"}
+    assert "pendingQuestion" not in operation
+    assert "unresolvedOperation is forbidden" in prompt
+    assert "Do not change this deletion into ADD, PATCH_REQUEST_ITEM, or UPDATE_ENTITY" in prompt
+
+
+def test_change_input_prompt_states_pending_question_and_analysis_message_rules():
+    prompt = _change_input_system_prompt()
+    assert "analysisMessage must be a nonblank string; null is forbidden" in prompt
+    assert "pendingQuestion is allowed as an object only when at least one field is missing" in prompt
+    assert "attemptCount must be an integer >= 1" in prompt
+    assert "If nothing is missing, pendingQuestion must be null" in prompt
+
+
+def test_change_input_repair_contains_safe_specific_contract_context(monkeypatch):
+    invalid = _envelope({
+        "operationType": "PATCH_REQUEST_ITEM",
+        "requestItemId": ITEM_ID,
+        "entityType": "TASK",
+        "changedFields": ["estimatedMinutes", "estimatedMinutesSource"],
+        "patch": {"estimatedMinutes": 90, "estimatedMinutesSource": "USER"},
+        "pendingQuestion": None,
+    })
+    responses = iter([json.dumps(invalid), json.dumps(_envelope(_task_add()))])
+    calls = []
+    monkeypatch.setattr(solar_client, "call_solar", lambda payload: calls.append(payload) or next(responses))
+    solar_client.analyze_change_input(
+        "change",
+        now=solar_client.datetime.now(solar_client._SEOUL_TZ),
+        purpose=solar_client.SolarRequestPurpose.ACTIVE_CYCLE,
+        candidate_request_items={ITEM_ID: {"entityType": "TASK", "action": "CREATE"}},
+    )
+    repair_instruction = calls[1]["messages"][-1]["content"]
+    assert "Rewrite the entire JSON object from scratch" in repair_instruction
+    assert "operation index: 0" in repair_instruction
+    assert "expected exact keys:" in repair_instruction
+    assert "allowed logical fields:" in repair_instruction
+    assert "required patch storage keys:" in repair_instruction
+    assert ITEM_ID not in repair_instruction
+    assert len(calls) == 2
+
+
+def test_change_input_delete_repair_preserves_intent_and_restates_exact_keys(monkeypatch):
+    invalid = {
+        "analysisMessage": "x",
+        "operations": [],
+        "unresolvedOperation": None,
+    }
+    valid = _envelope({
+        "operationType": "DELETE_REQUEST_ITEM",
+        "requestItemId": ITEM_ID,
+        "entityType": "TASK",
+    })
+    responses = iter([json.dumps(invalid), json.dumps(valid)])
+    calls = []
+    monkeypatch.setattr(solar_client, "call_solar", lambda payload: calls.append(payload) or next(responses))
+    solar_client.analyze_change_input(
+        "delete",
+        now=solar_client.datetime.now(solar_client._SEOUL_TZ),
+        purpose=solar_client.SolarRequestPurpose.ACTIVE_CYCLE,
+        candidate_request_items={ITEM_ID: {"entityType": "TASK", "action": "CREATE"}},
+    )
+    instruction = calls[1]["messages"][-1]["content"]
+    assert "must remain DELETE_REQUEST_ITEM" in instruction
+    assert "Do not change deletion intent into ADD" in instruction
+    assert "operationType, requestItemId, entityType" in instruction
+    assert "Remove pendingQuestion" in instruction
+    assert len(calls) == 2
+
+
+def test_change_input_context_includes_candidate_counts_without_replacing_candidates():
+    content = solar_client._build_change_input_operation_prompt_messages(
+        "message",
+        now=solar_client.datetime.now(solar_client._SEOUL_TZ),
+        cycle_start=None,
+        cycle_end=None,
+        candidate_tasks=[{"id": TASK_ID}],
+        candidate_fixed_schedules=[{"id": "33333333-3333-3333-3333-333333333333"}],
+        candidate_request_items=[{"id": ITEM_ID, "entityType": "TASK", "action": "CREATE"}],
+    )[0]["content"]
+    context_text = content.split("SECTION 2 — CANDIDATE FACTS\n", 1)[1].split("\n\n", 1)[0]
+    context = json.loads(context_text)
+    assert context["candidateRequestItemCount"] == 1
+    assert context["candidateTaskCount"] == 1
+    assert context["candidateFixedScheduleCount"] == 1
+    assert context["totalEntityCandidateCount"] == 2
+    assert context["candidateRequestItems"][0]["id"] == ITEM_ID
+    assert context["candidateTasks"][0]["id"] == TASK_ID
+
+
+def test_change_input_decision_section_encodes_filtered_candidate_hard_rules():
+    prompt = _change_input_system_prompt()
+    decide = prompt.split("SECTION 1 — DECIDE OPERATION", 1)[1].split("SECTION 2 — CANDIDATE FACTS", 1)[0]
+    assert "candidate count is zero" in decide
+    assert "null values and pendingQuestion" in decide
+    assert "exactly one matching candidateRequestItem" in decide
+    assert "DELETE_REQUEST_ITEM" in decide
+    assert "two or more matching existing targets" in decide
+    assert "unresolvedOperation" in decide
+
+
+def test_change_input_prompt_orders_decision_facts_then_exact_json():
+    prompt = _change_input_system_prompt()
+    assert prompt.index("SECTION 1 — DECIDE OPERATION") < prompt.index("SECTION 2 — CANDIDATE FACTS")
+    assert prompt.index("SECTION 2 — CANDIDATE FACTS") < prompt.index("SECTION 3 — BUILD EXACT JSON")
+    assert "A namespace with count 0 cannot supply an ID" in prompt
+    assert "A single matching candidate is not ambiguous" in prompt
+
+
+def test_change_input_builder_has_no_unused_legacy_prompt_variables():
+    source = inspect.getsource(solar_client._build_change_input_operation_prompt_messages)
+    assert "system_prompt =" not in source
+    assert "final_decision_gate =" not in source
