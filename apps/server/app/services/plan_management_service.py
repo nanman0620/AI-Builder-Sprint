@@ -338,6 +338,35 @@ def _find_unresolved_question_message(messages: Sequence[SolarMessage]) -> Solar
     return latest_unresolved
 
 
+def _find_special_question_message(messages: Sequence[SolarMessage]) -> SolarMessage | None:
+    """Issue #66: `_find_unresolved_question_message`를 일반화한 버전 — "대상 모호"(unresolved)
+    질문뿐 아니라 "대상은 확정됐지만 무엇을 바꿀지 아직 모름"(followUpType="CHANGE_DETAILS")
+    질문도 함께 찾는다. 기존 `_find_unresolved_question_message`는 유일한 호출부가 이 함수로
+    교체돼 더 이상 쓰이지 않지만, 회귀 위험을 피하기 위해 그대로 남겨둔다(삭제하지 않음).
+
+    supersession 규칙은 기존과 동일하다: 두 카테고리를 합친 후보 중 sequence_no가 가장 큰
+    메시지를 찾고, 그보다 큰 sequence_no의 메시지가 하나라도 있으면 이미 해소된 것으로 보고
+    None을 반환한다.
+    """
+    candidates = [
+        message
+        for message in messages
+        if message.role == SolarMessageRole.ASSISTANT
+        and message.kind == SolarMessageKind.QUESTION
+        and isinstance(message.message_metadata, dict)
+        and (
+            message.message_metadata.get("unresolved") is True
+            or message.message_metadata.get("followUpType") == "CHANGE_DETAILS"
+        )
+    ]
+    if not candidates:
+        return None
+    latest = max(candidates, key=lambda m: m.sequence_no)
+    if any(message.sequence_no > latest.sequence_no for message in messages):
+        return None
+    return latest
+
+
 def _find_question_metadata(
     messages: Sequence[SolarMessage], pending_item_id: uuid.UUID, field: str
 ) -> dict | None:
@@ -445,13 +474,15 @@ def _build_solar_request_detail(
     pending_item_id: uuid.UUID | None = None
 
     if request.status == SolarRequestStatus.COLLECTING:
-        # Issue #50: 카드 없는 "대상 모호" 질문이 아직 해소되지 않았으면 카드 기반 질문보다
-        # 항상 우선한다(저장 쪽도 둘 중 하나만 메시지를 만들므로 실제로는 상호 배타적이다).
-        unresolved_message = _find_unresolved_question_message(sorted_messages)
-        if unresolved_message is not None:
-            current_question = CurrentQuestion(
-                item_id=None, field="targetEntityId", message=unresolved_message.content
-            )
+        # Issue #50/#66: 카드 없는 특수 질문(대상 모호 unresolved, 또는 대상은 확정됐지만 무엇을
+        # 바꿀지 모르는 CHANGE_DETAILS)이 아직 해소되지 않았으면 카드 기반 질문보다 항상
+        # 우선한다(저장 쪽도 셋 중 하나만 메시지를 만들므로 실제로는 상호 배타적이다).
+        special_message = _find_special_question_message(sorted_messages)
+        if special_message is not None:
+            metadata = special_message.message_metadata
+            is_change_details = isinstance(metadata, dict) and metadata.get("followUpType") == "CHANGE_DETAILS"
+            field = "changeDetails" if is_change_details else "targetEntityId"
+            current_question = CurrentQuestion(item_id=None, field=field, message=special_message.content)
             input_placeholder = _CHANGE_INPUT_PLACEHOLDER
         else:
             pending_item = _find_pending_item(request, sorted_items)

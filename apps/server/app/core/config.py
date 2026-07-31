@@ -50,3 +50,17 @@ def get_solar_model() -> str:
         return "solar-pro2"
 
     return solar_model.strip()
+
+
+def get_gemini_api_key() -> str:
+    gemini_api_key = os.environ.get("GEMINI_API_KEY")
+    if not gemini_api_key or not gemini_api_key.strip():
+        raise RuntimeError("GEMINI_API_KEY 환경변수가 설정되어 있지 않다.")
+    return gemini_api_key.strip()
+
+
+def get_gemini_model() -> str:
+    gemini_model = os.environ.get("GEMINI_MODEL")
+    if not gemini_model or not gemini_model.strip():
+        return "gemini-3.6-flash"
+    return gemini_model.strip()
