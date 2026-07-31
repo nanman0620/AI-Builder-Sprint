@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
@@ -14,6 +14,8 @@ from app.models.enums import PlanBlockStatus, PlanCycleStatus, PlanPeriod
 from app.models.plan_block import PlanBlock
 from app.models.planning_cycle import PlanningCycle
 from app.services import home_service
+from app.services.check_in_service import CheckInResultPlanBlock, CheckInResultState, FinalizingInfo
+from app.services.deadline_warning_service import DeadlineWarningItem, DeadlineWarningNotice
 from app.services.plan_block_service import PlanBlockProgress
 
 SEOUL_TZ = ZoneInfo("Asia/Seoul")
@@ -240,3 +242,151 @@ def test_missing_authorization_header_returns_401(unauthenticated_client, fake_g
     assert body["error"]["code"] == "AUTH_REQUIRED"
 
     fake_get_home_current_state.assert_not_called()
+
+
+def test_finalizing_returns_finalizing_payload_and_nulls_elsewhere(
+    authenticated_client, fake_get_home_current_state
+):
+    finalizing_info = FinalizingInfo(
+        check_in_id=uuid.uuid4(),
+        check_date=date(2026, 7, 29),
+        period=PlanPeriod.MORNING,
+        finalization_started_at=datetime(2026, 7, 29, 12, 0, tzinfo=SEOUL_TZ),
+    )
+    fake_get_home_current_state.return_value = home_service.HomeCurrentState(
+        home_mode=home_service.HomeMode.FINALIZING,
+        server_time=FIXED_NOW,
+        logical_date=date(2026, 7, 30),
+        period=PlanPeriod.AFTERNOON,
+        active_cycle=None,
+        progress=None,
+        plan_blocks=[],
+        blocking_notice=None,
+        finalizing=finalizing_info,
+        check_in_result=None,
+    )
+
+    response = authenticated_client.get("/api/v1/home/current", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["homeMode"] == "FINALIZING"
+    assert data["blockingNotice"] is None
+    assert data["progress"] is None
+    assert data["planBlocks"] == []
+    assert data["checkInResult"] is None
+    assert data["finalizing"] == {
+        "checkInId": str(finalizing_info.check_in_id),
+        "checkDate": "2026-07-29",
+        "period": "MORNING",
+        "finalizationStartedAt": "2026-07-29T12:00:00+09:00",
+    }
+
+
+def test_check_in_result_returns_result_payload_with_completed_and_not_done_plans(
+    authenticated_client, fake_get_home_current_state
+):
+    result_state = CheckInResultState(
+        id=uuid.uuid4(),
+        check_date=date(2026, 7, 29),
+        period=PlanPeriod.MORNING,
+        total_plan_count=3,
+        completed_plan_count=2,
+        not_done_plan_count=1,
+        score=67,
+        replan_unplaced_minutes=0,
+        finalized_at=datetime(2026, 7, 29, 12, 0, 5, tzinfo=SEOUL_TZ),
+        cycle_ended=False,
+        completed_plans=[
+            CheckInResultPlanBlock(
+                id=uuid.uuid4(), display_title="자료구조 2문제", status=PlanBlockStatus.COMPLETED
+            )
+        ],
+        not_done_plans=[
+            CheckInResultPlanBlock(
+                id=uuid.uuid4(), display_title="영단어 암기", status=PlanBlockStatus.NOT_DONE
+            )
+        ],
+    )
+    fake_get_home_current_state.return_value = home_service.HomeCurrentState(
+        home_mode=home_service.HomeMode.CHECK_IN_RESULT,
+        server_time=FIXED_NOW,
+        logical_date=date(2026, 7, 30),
+        period=PlanPeriod.AFTERNOON,
+        active_cycle=None,
+        progress=None,
+        plan_blocks=[],
+        blocking_notice=None,
+        finalizing=None,
+        check_in_result=result_state,
+    )
+
+    response = authenticated_client.get("/api/v1/home/current", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["homeMode"] == "CHECK_IN_RESULT"
+    assert data["finalizing"] is None
+    result_json = data["checkInResult"]
+    assert result_json["totalPlanCount"] == 3
+    assert result_json["completedPlanCount"] == 2
+    assert result_json["notDonePlanCount"] == 1
+    assert result_json["score"] == 67
+    assert result_json["cycleEnded"] is False
+    assert result_json["completedPlans"] == [
+        {
+            "id": str(result_state.completed_plans[0].id),
+            "displayTitle": "자료구조 2문제",
+            "status": "COMPLETED",
+        }
+    ]
+    assert result_json["notDonePlans"] == [
+        {
+            "id": str(result_state.not_done_plans[0].id),
+            "displayTitle": "영단어 암기",
+            "status": "NOT_DONE",
+        }
+    ]
+
+
+def test_deadline_warning_blocking_notice_keeps_home_mode(
+    authenticated_client, fake_get_home_current_state
+):
+    task_id = uuid.uuid4()
+    notice = DeadlineWarningNotice(
+        items=[
+            DeadlineWarningItem(
+                task_id=task_id,
+                title="자료구조 과제",
+                deadline_at=FIXED_NOW + timedelta(days=2),
+                required_minutes=180,
+                available_minutes=120,
+                shortage_minutes=60,
+                created_at=FIXED_NOW,
+            )
+        ]
+    )
+    fake_get_home_current_state.return_value = home_service.HomeCurrentState(
+        home_mode=home_service.HomeMode.IN_PROGRESS,
+        server_time=FIXED_NOW,
+        logical_date=date(2026, 7, 30),
+        period=PlanPeriod.AFTERNOON,
+        active_cycle=_make_cycle(),
+        progress=PlanBlockProgress(checked_count=0, total_count=1, percentage=0),
+        plan_blocks=[_make_block()],
+        blocking_notice=notice,
+        finalizing=None,
+        check_in_result=None,
+    )
+
+    response = authenticated_client.get("/api/v1/home/current", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    # DEADLINE_WARNING이 있어도 homeMode는 기본 상태(IN_PROGRESS)를 유지한다.
+    assert data["homeMode"] == "IN_PROGRESS"
+    assert data["blockingNotice"]["type"] == "DEADLINE_WARNING"
+    assert isinstance(data["blockingNotice"]["items"], list)
+    assert len(data["blockingNotice"]["items"]) == 1
+    assert data["blockingNotice"]["items"][0]["taskId"] == str(task_id)
+    assert data["blockingNotice"]["items"][0]["shortageMinutes"] == 60

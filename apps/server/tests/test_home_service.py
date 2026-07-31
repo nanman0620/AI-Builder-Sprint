@@ -6,6 +6,7 @@ from app.models.enums import PlanBlockStatus, PlanCycleStatus, PlanPeriod
 from app.models.plan_block import PlanBlock
 from app.models.planning_cycle import PlanningCycle
 from app.services import home_service
+from tests.support_check_in import FakeCheckInSession
 
 SEOUL_TZ = ZoneInfo("Asia/Seoul")
 
@@ -49,52 +50,13 @@ def _make_block(**overrides):
     return PlanBlock(**defaults)
 
 
-class _FakeScalars:
-    def __init__(self, items):
-        self._items = items
-
-    def all(self):
-        return self._items
-
-
-class _FakeResult:
-    def __init__(self, *, value=None, items=None):
-        self._value = value
-        self._items = items
-
-    def scalar_one_or_none(self):
-        return self._value
-
-    def scalars(self):
-        return _FakeScalars(self._items or [])
-
-
-class _FakeSession:
-    """execute() 호출 순서: 1) 활성 PlanningCycle, 2) (cycle이 있을 때만) 현재 분기 PlanBlock 목록.
-
-    begin()이 호출되면 즉시 실패시켜 get_home_current_state가 완전한 조회 전용으로
-    동작하는지(쓰기 트랜잭션을 열지 않는지)를 검증한다.
-    """
-
-    def __init__(self, *, cycle, blocks=None):
-        self._cycle = cycle
-        self._blocks = blocks or []
-        self.execute_calls = 0
-        self.begin_called = False
-
-    def begin(self):
-        self.begin_called = True
-        raise AssertionError("get_home_current_state는 db.begin()을 호출하면 안 된다.")
-
-    def execute(self, stmt):
-        self.execute_calls += 1
-        if self.execute_calls == 1:
-            return _FakeResult(value=self._cycle)
-        return _FakeResult(items=self._blocks)
+def _fake_db(*rows):
+    """조회 전용 서비스 검증용 Fake. db.begin()을 호출하면 즉시 실패한다."""
+    return FakeCheckInSession(forbid_begin=True).seed(*rows)
 
 
 def test_no_active_cycle_returns_no_active_cycle_mode():
-    fake_db = _FakeSession(cycle=None)
+    fake_db = _fake_db()
 
     state = home_service.get_home_current_state(fake_db, USER_ID, now=NOW)
 
@@ -102,13 +64,14 @@ def test_no_active_cycle_returns_no_active_cycle_mode():
     assert state.active_cycle is None
     assert state.progress is None
     assert state.plan_blocks == []
-    # cycle이 없으면 PlanBlock 조회 자체를 하지 않는다.
-    assert fake_db.execute_calls == 1
+    assert state.blocking_notice is None
+    assert state.finalizing is None
+    assert state.check_in_result is None
 
 
 def test_active_cycle_without_blocks_returns_no_plans_mode():
     cycle = _make_cycle()
-    fake_db = _FakeSession(cycle=cycle, blocks=[])
+    fake_db = _fake_db(cycle)
 
     state = home_service.get_home_current_state(fake_db, USER_ID, now=NOW)
 
@@ -118,13 +81,15 @@ def test_active_cycle_without_blocks_returns_no_plans_mode():
     assert state.progress.total_count == 0
     assert state.progress.percentage == 0
     assert state.plan_blocks == []
+    # 경고 대상 Task가 없으므로 BE-10 서비스를 그대로 통과시켜도 자연스럽게 None이다.
+    assert state.blocking_notice is None
 
 
 def test_active_cycle_with_blocks_returns_in_progress_mode():
     cycle = _make_cycle()
     b1 = _make_block(status=PlanBlockStatus.CHECKED, display_order=0)
     b2 = _make_block(status=PlanBlockStatus.PLANNED, display_order=1)
-    fake_db = _FakeSession(cycle=cycle, blocks=[b1, b2])
+    fake_db = _fake_db(cycle, b1, b2)
 
     state = home_service.get_home_current_state(fake_db, USER_ID, now=NOW)
 
@@ -133,12 +98,12 @@ def test_active_cycle_with_blocks_returns_in_progress_mode():
     assert state.progress.checked_count == 1
     assert state.progress.total_count == 2
     assert state.progress.percentage == 50
-    # home_service는 조회된 순서를 그대로 보존한다(정렬은 쿼리 계층 책임).
     assert state.plan_blocks == [b1, b2]
+    assert state.blocking_notice is None
 
 
 def test_server_time_echoes_injected_now():
-    fake_db = _FakeSession(cycle=None)
+    fake_db = _fake_db()
 
     state = home_service.get_home_current_state(fake_db, USER_ID, now=NOW)
 
@@ -147,7 +112,7 @@ def test_server_time_echoes_injected_now():
 
 def test_logical_date_before_4am_belongs_to_previous_day():
     early_morning = datetime(2026, 7, 30, 2, 0, tzinfo=SEOUL_TZ)
-    fake_db = _FakeSession(cycle=None)
+    fake_db = _fake_db()
 
     state = home_service.get_home_current_state(fake_db, USER_ID, now=early_morning)
 
@@ -157,8 +122,9 @@ def test_logical_date_before_4am_belongs_to_previous_day():
 
 def test_get_home_current_state_never_opens_write_transaction():
     cycle = _make_cycle()
-    fake_db = _FakeSession(cycle=cycle, blocks=[_make_block()])
+    fake_db = _fake_db(cycle, _make_block())
 
     home_service.get_home_current_state(fake_db, USER_ID, now=NOW)
 
-    assert fake_db.begin_called is False
+    # _fake_db는 forbid_begin=True이므로 begin()이 호출되면 이 호출 자체가 실패한다.
+    # 예외 없이 끝났다는 것 자체가 db.begin()이 호출되지 않았다는 증거다.

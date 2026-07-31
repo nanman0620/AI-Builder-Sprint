@@ -22,8 +22,11 @@ class InitialScreen(str, Enum):
     EXECUTING = "EXECUTING"
     EXECUTION_SUCCESS = "EXECUTION_SUCCESS"
     EXECUTION_FAILED = "EXECUTION_FAILED"
-    # 우선순위 3: 현재 SOLAR 요청 없음. home_service가 실제로 지원하는 상태만 포함한다
-    # (FINALIZING/CHECK_IN_RESULT/DEADLINE_WARNING은 home_service 미구현이라 여기 없음).
+    # 우선순위 3: 현재 SOLAR 요청 없음. home_service의 homeMode 후보와 DEADLINE_WARNING
+    # (blockingNotice에서 파생, home.homeMode 자체는 바꾸지 않는다)을 모두 포함한다.
+    FINALIZING = "FINALIZING"
+    CHECK_IN_RESULT = "CHECK_IN_RESULT"
+    DEADLINE_WARNING = "DEADLINE_WARNING"
     NO_ACTIVE_CYCLE = "NO_ACTIVE_CYCLE"
     NO_PLANS = "NO_PLANS"
     IN_PROGRESS = "IN_PROGRESS"
@@ -91,7 +94,12 @@ def get_bootstrap_state(db: Session, user_id: uuid.UUID, *, now: datetime) -> Bo
         screen_mode = solar_request_service.resolve_no_request_screen_mode(
             has_active_cycle=home_state.active_cycle is not None
         )
-        initial_screen = InitialScreen(home_state.home_mode.value)
+        if home_state.blocking_notice is not None:
+            # DEADLINE_WARNING은 home.homeMode를 바꾸지 않는 blockingNotice이므로 여기서만
+            # initialScreen을 덮어쓰고, home_state.home_mode 자체는 그대로 둔다.
+            initial_screen = InitialScreen.DEADLINE_WARNING
+        else:
+            initial_screen = InitialScreen(home_state.home_mode.value)
 
     return BootstrapState(
         server_time=now,

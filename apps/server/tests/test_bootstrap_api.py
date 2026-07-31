@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
@@ -15,6 +15,8 @@ from app.models.planning_cycle import PlanningCycle
 from app.models.solar_request import SolarRequest
 from app.services import bootstrap_service, home_service
 from app.services.bootstrap_service import BootstrapProfile, BootstrapState, InitialScreen
+from app.services.check_in_service import CheckInResultState, FinalizingInfo
+from app.services.deadline_warning_service import DeadlineWarningItem, DeadlineWarningNotice
 from app.services.plan_block_service import PlanBlockProgress
 from app.services.solar_request_service import PlanManagementScreenMode
 
@@ -48,7 +50,9 @@ def _cycle(**overrides):
     return PlanningCycle(**defaults)
 
 
-def _home_state(*, home_mode, active_cycle=None):
+def _home_state(
+    *, home_mode, active_cycle=None, blocking_notice=None, finalizing=None, check_in_result=None
+):
     return home_service.HomeCurrentState(
         home_mode=home_mode,
         server_time=FIXED_NOW,
@@ -59,6 +63,9 @@ def _home_state(*, home_mode, active_cycle=None):
         if active_cycle
         else None,
         plan_blocks=[],
+        blocking_notice=blocking_notice,
+        finalizing=finalizing,
+        check_in_result=check_in_result,
     )
 
 
@@ -281,3 +288,128 @@ def test_server_time_has_plus_nine_hour_offset(authenticated_client, fake_get_bo
     server_time = datetime.fromisoformat(response.json()["data"]["serverTime"])
     assert server_time.utcoffset() is not None
     assert server_time.utcoffset().total_seconds() == 9 * 3600
+
+
+def test_finalizing_initial_screen_and_home_payload(authenticated_client, fake_get_bootstrap_state):
+    finalizing = FinalizingInfo(
+        check_in_id=uuid.uuid4(),
+        check_date=date(2026, 7, 30),
+        period=PlanPeriod.AFTERNOON,
+        finalization_started_at=FIXED_NOW,
+    )
+    home_state = _home_state(home_mode=home_service.HomeMode.FINALIZING, finalizing=finalizing)
+    fake_get_bootstrap_state.return_value = BootstrapState(
+        server_time=FIXED_NOW,
+        profile=_profile(),
+        initial_screen=InitialScreen.FINALIZING,
+        active_cycle=None,
+        plan_management_screen_mode=PlanManagementScreenMode.NEW_CYCLE_ENTRY,
+        current_request=None,
+        home_state=home_state,
+    )
+
+    response = authenticated_client.get("/api/v1/bootstrap", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["initialScreen"] == "FINALIZING"
+    assert data["home"]["homeMode"] == "FINALIZING"
+    assert data["home"]["finalizing"]["checkInId"] == str(finalizing.check_in_id)
+
+
+def test_check_in_result_initial_screen_and_home_payload(
+    authenticated_client, fake_get_bootstrap_state
+):
+    result_state = CheckInResultState(
+        id=uuid.uuid4(),
+        check_date=date(2026, 7, 29),
+        period=PlanPeriod.MORNING,
+        total_plan_count=3,
+        completed_plan_count=2,
+        not_done_plan_count=1,
+        score=67,
+        replan_unplaced_minutes=0,
+        finalized_at=FIXED_NOW,
+        cycle_ended=False,
+        completed_plans=[],
+        not_done_plans=[],
+    )
+    home_state = _home_state(
+        home_mode=home_service.HomeMode.CHECK_IN_RESULT, check_in_result=result_state
+    )
+    fake_get_bootstrap_state.return_value = BootstrapState(
+        server_time=FIXED_NOW,
+        profile=_profile(),
+        initial_screen=InitialScreen.CHECK_IN_RESULT,
+        active_cycle=None,
+        plan_management_screen_mode=PlanManagementScreenMode.NEW_CYCLE_ENTRY,
+        current_request=None,
+        home_state=home_state,
+    )
+
+    response = authenticated_client.get("/api/v1/bootstrap", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["initialScreen"] == "CHECK_IN_RESULT"
+    assert data["home"]["homeMode"] == "CHECK_IN_RESULT"
+    assert data["home"]["checkInResult"]["score"] == 67
+
+
+def test_deadline_warning_initial_screen_keeps_home_mode(
+    authenticated_client, fake_get_bootstrap_state
+):
+    cycle = _cycle()
+    notice = DeadlineWarningNotice(
+        items=[
+            DeadlineWarningItem(
+                task_id=uuid.uuid4(),
+                title="과제",
+                deadline_at=FIXED_NOW + timedelta(days=1),
+                required_minutes=180,
+                available_minutes=120,
+                shortage_minutes=60,
+                created_at=FIXED_NOW,
+            )
+        ]
+    )
+    home_state = _home_state(
+        home_mode=home_service.HomeMode.IN_PROGRESS, active_cycle=cycle, blocking_notice=notice
+    )
+    fake_get_bootstrap_state.return_value = BootstrapState(
+        server_time=FIXED_NOW,
+        profile=_profile(),
+        initial_screen=InitialScreen.DEADLINE_WARNING,
+        active_cycle=cycle,
+        plan_management_screen_mode=PlanManagementScreenMode.ACTIVE_CYCLE_ENTRY,
+        current_request=None,
+        home_state=home_state,
+    )
+
+    response = authenticated_client.get("/api/v1/bootstrap", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["initialScreen"] == "DEADLINE_WARNING"
+    # initialScreen만 DEADLINE_WARNING이고 home.homeMode는 기본 상태(IN_PROGRESS)를 유지한다.
+    assert data["home"]["homeMode"] == "IN_PROGRESS"
+    assert data["home"]["blockingNotice"]["type"] == "DEADLINE_WARNING"
+
+
+def test_bootstrap_call_does_not_write_to_db(authenticated_client, fake_get_bootstrap_state):
+    """bootstrap_service.get_bootstrap_state를 monkeypatch로 대체했으므로, 라우터 계층이
+    그 위에서 별도의 DB 쓰기를 수행하지 않는지 확인한다(_override_get_db가 None을 넘겨주므로
+    라우터가 db를 직접 사용하려 하면 즉시 예외가 발생한다)."""
+    fake_get_bootstrap_state.return_value = BootstrapState(
+        server_time=FIXED_NOW,
+        profile=_profile(),
+        initial_screen=InitialScreen.NO_ACTIVE_CYCLE,
+        active_cycle=None,
+        plan_management_screen_mode=PlanManagementScreenMode.NEW_CYCLE_ENTRY,
+        current_request=None,
+        home_state=_home_state(home_mode=home_service.HomeMode.NO_ACTIVE_CYCLE),
+    )
+
+    response = authenticated_client.get("/api/v1/bootstrap", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
