@@ -1,16 +1,18 @@
 import { useFocusEffect, useNavigation, usePreventRemove } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { BackHandler } from 'react-native';
 
 import { ErrorView } from '@/src/components/common/error-view';
 import { LoadingView } from '@/src/components/common/loading-view';
-import { RoutePlaceholder } from '@/src/components/common/route-placeholder';
 
 import { ChangeConfirmationScreen } from '../components/change-confirmation-screen';
 import { ChangeInputScreen } from '../components/change-input-screen';
 import { CollectingScreen } from '../components/collecting-screen';
 import { EntryScreen } from '../components/entry-screen';
+import { ExecutionFailedScreen } from '../components/execution-failed-screen';
+import { ExecutionSuccessScreen } from '../components/execution-success-screen';
+import { ExecutingScreen } from '../components/executing-screen';
 import { ExitConfirmationModal } from '../components/exit-confirmation-modal';
 import { FinalReviewScreen } from '../components/final-review-screen';
 import { usePlanExitGuard } from '../contexts/plan-exit-guard-context';
@@ -31,6 +33,7 @@ const ACTIVE_CYCLE_EXAMPLES = [
 export function PlanManagementScreen() {
   const router = useRouter();
   const navigation = useNavigation();
+  const allowResultExitRef = useRef(false);
   const {
     isGuardActive,
     pendingDestination,
@@ -45,12 +48,19 @@ export function PlanManagementScreen() {
     hasLoadError,
     actionError,
     exitError,
+    executionRefreshError,
+    isExecutionRefreshing,
     isSubmitting,
     reload,
     submitInitialMessage,
     sendAnswer,
     submitDecision,
     reopenRequest,
+    executeRequest,
+    refreshExecution,
+    retryExecution,
+    acknowledgeExecutionResult,
+    cancelFailedRequest,
     deleteCurrentRequest,
     clearExitError,
   } = usePlanManagement();
@@ -61,27 +71,52 @@ export function PlanManagementScreen() {
       state.screenMode === 'CHANGE_CONFIRMATION' ||
       state.screenMode === 'CHANGE_INPUT' ||
       state.screenMode === 'FINAL_REVIEW');
+  const isBlockingResult =
+    state?.screenMode === 'EXECUTION_SUCCESS' ||
+    state?.screenMode === 'EXECUTION_FAILED';
+
+  // 성공·실패 결과는 계획관리 탭이 포커스된 동안만 탭 바를 숨긴다.
+  // EXECUTING과 기존 작성 상태는 기존 탭 바를 그대로 표시한다.
+  useFocusEffect(
+    useCallback(() => {
+      navigation.setOptions({
+        tabBarStyle: isBlockingResult ? { display: 'none' } : undefined,
+      });
+      return () => {
+        navigation.setOptions({ tabBarStyle: undefined });
+      };
+    }, [isBlockingResult, navigation])
+  );
 
   useEffect(() => {
     setGuardActive(isProtectedDraft);
     return () => setGuardActive(false);
   }, [isProtectedDraft, setGuardActive]);
 
-  usePreventRemove(isProtectedDraft, ({ data }) => {
+  usePreventRemove(isProtectedDraft || isBlockingResult, ({ data }) => {
+    if (isBlockingResult) {
+      if (allowResultExitRef.current) {
+        navigation.dispatch(data.action);
+      }
+      return;
+    }
     requestExit('back', () => navigation.dispatch(data.action));
   });
 
   useFocusEffect(
     useCallback(() => {
-      if (!isProtectedDraft) {
+      if (!isProtectedDraft && !isBlockingResult) {
         return;
       }
       const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+        if (isBlockingResult) {
+          return true;
+        }
         requestExit('back', () => router.back());
         return true;
       });
       return () => subscription.remove();
-    }, [isProtectedDraft, requestExit, router])
+    }, [isBlockingResult, isProtectedDraft, requestExit, router])
   );
 
   const handleDismissExit = () => {
@@ -94,6 +129,16 @@ export function PlanManagementScreen() {
     if (deleted) {
       completeExit();
     }
+  };
+
+  const handleAcknowledgeResult = async () => {
+    const acknowledged = await acknowledgeExecutionResult();
+    if (!acknowledged) {
+      return;
+    }
+    allowResultExitRef.current = true;
+    // 홈 화면은 탭 포커스 시 기존 useHome 경계에서 GET /home/current를 재호출한다.
+    router.replace('/(tabs)/home');
   };
 
   if (!state && isLoading) {
@@ -169,17 +214,40 @@ export function PlanManagementScreen() {
           actionError={actionError}
           onReload={reload}
           onReopen={reopenRequest}
+          onExecute={executeRequest}
         />
       );
       break;
     case 'EXECUTING':
-    case 'EXECUTION_SUCCESS':
-    case 'EXECUTION_FAILED':
-      // FE-05 범위. 같은 /plan-management Route 안에서 후속 Issue가 이어서 구현한다.
       content = (
-        <RoutePlaceholder
-          title="계획관리"
-          description={`${state.screenMode} 화면은 후속 Issue에서 구현됩니다.`}
+        <ExecutingScreen
+          refreshError={executionRefreshError}
+          isRefreshing={isExecutionRefreshing}
+          onRefresh={() => refreshExecution(state.request.id)}
+        />
+      );
+      break;
+    case 'EXECUTION_SUCCESS':
+      content = (
+        <ExecutionSuccessScreen
+          result={state.request.execution?.executionResult ?? null}
+          isSubmitting={isSubmitting}
+          error={actionError}
+          onAcknowledge={handleAcknowledgeResult}
+        />
+      );
+      break;
+    case 'EXECUTION_FAILED':
+      content = (
+        <ExecutionFailedScreen
+          message={
+            state.request.execution?.error?.message ??
+            '계획을 반영하는 중 문제가 발생했어요.'
+          }
+          isSubmitting={isSubmitting}
+          actionError={actionError}
+          onRetry={retryExecution}
+          onCancel={cancelFailedRequest}
         />
       );
       break;
