@@ -17,7 +17,15 @@ from app.models.solar_message import SolarMessage
 from app.models.solar_request import SolarRequest
 from app.models.solar_request_item import SolarRequestItem
 from app.services import solar_request_service
-from app.services.solar_client import ResolvedTargetOnly, SolarAnalysisItem
+from app.services.solar_client import (
+    ChangeInputAddOperation,
+    ChangeInputAnalysisResult,
+    ChangeInputDeleteRequestItemOperation,
+    ChangeInputOperationType,
+    ChangeInputPatchRequestItemOperation,
+    ResolvedTargetOnly,
+    SolarAnalysisItem,
+)
 
 USER_ID = uuid.uuid4()
 NOW = datetime(2026, 7, 31, 12, 0, tzinfo=timezone.utc)
@@ -89,8 +97,81 @@ def _make_message(*, sequence_no, role, kind, metadata=None, content="내용"):
 
 
 class _FakeDb:
+    def __init__(self):
+        self.added = []
+        self.deleted = []
+
+    def add(self, value):
+        self.added.append(value)
+
+    def delete(self, value):
+        self.deleted.append(value)
+
     def flush(self):
         pass
+
+
+def test_change_input_add_initializes_remaining_minutes_server_side():
+    request = _make_request(status=SolarRequestStatus.CHANGE_INPUT)
+    operation = ChangeInputAddOperation(
+        ChangeInputOperationType.ADD, "TASK", "과제 추가",
+        {"title": "과제", "deadlineAt": None, "estimatedMinutes": 80,
+         "estimatedMinutesSource": "USER", "remainingMinutes": None,
+         "amountText": None, "amountSource": "UNKNOWN"}, [], None,
+    )
+    items = []
+    solar_request_service._apply_change_input_operations(
+        _FakeDb(), user_id=USER_ID, request=request, items=items,
+        analysis=ChangeInputAnalysisResult("반영", [operation], None), raw_line_text="추가",
+    )
+    assert items[0].normalized_payload["remainingMinutes"] == 80
+
+
+def test_change_input_patch_preserves_untouched_payload_and_syncs_remaining():
+    item = _make_item(
+        item_order=1, action="CREATE", status="READY",
+        normalized_payload={"title": "기존", "deadlineAt": None, "estimatedMinutes": 30,
+                            "estimatedMinutesSource": "USER", "remainingMinutes": 10,
+                            "amountText": None, "amountSource": "UNKNOWN"},
+    )
+    operation = ChangeInputPatchRequestItemOperation(
+        ChangeInputOperationType.PATCH_REQUEST_ITEM, str(item.id), "TASK",
+        ["estimatedMinutes"], {"estimatedMinutes": 90, "estimatedMinutesSource": "USER"}, [], None,
+    )
+    solar_request_service._apply_change_input_operations(
+        _FakeDb(), user_id=USER_ID, request=_make_request(), items=[item],
+        analysis=ChangeInputAnalysisResult("반영", [operation], None), raw_line_text="수정",
+    )
+    assert item.normalized_payload["title"] == "기존"
+    assert item.normalized_payload["estimatedMinutes"] == 90
+    assert item.normalized_payload["remainingMinutes"] == 90
+
+
+def test_change_input_delete_request_item_physically_removes_and_renumbers():
+    first = _make_item(item_order=1, action="CREATE", status="READY")
+    second = _make_item(item_order=2, action="UPDATE", status="READY")
+    db = _FakeDb()
+    operation = ChangeInputDeleteRequestItemOperation(
+        ChangeInputOperationType.DELETE_REQUEST_ITEM, str(first.id), "TASK"
+    )
+    items = [first, second]
+    solar_request_service._apply_change_input_operations(
+        db, user_id=USER_ID, request=_make_request(), items=items,
+        analysis=ChangeInputAnalysisResult("반영", [operation], None), raw_line_text="삭제",
+    )
+    assert db.deleted == [first]
+    assert items == [second]
+    assert second.item_order == 1
+
+
+def test_change_input_invalid_fixed_schedule_becomes_missing_end_question():
+    payload, missing, pending = solar_request_service._normalize_change_fixed_schedule(
+        {"title": "회의", "startAt": "2026-08-01T11:00:00+09:00",
+         "endAt": "2026-08-01T10:00:00+09:00"}, [], None
+    )
+    assert payload["endAt"] is None
+    assert missing == ["endAt"]
+    assert pending["field"] == "endAt"
 
 
 # ---------------------------------------------------------------------------

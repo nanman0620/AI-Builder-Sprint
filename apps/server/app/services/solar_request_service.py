@@ -2,6 +2,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func, select
@@ -268,7 +269,7 @@ def _revalidate_target(
     return row
 
 
-def _backfill_update_payload(item, target_row) -> dict:
+def _backfill_update_payload(item, target_row, *, allow_invalid_fixed_schedule: bool = False) -> dict:
     payload = dict(item.normalized_payload)
     fields = set(item.update_fields)
     if item.entity_type == "TASK":
@@ -291,7 +292,8 @@ def _backfill_update_payload(item, target_row) -> dict:
             payload["startAt"] = target_row.start_at.isoformat()
         if "endAt" not in fields:
             payload["endAt"] = target_row.end_at.isoformat()
-        if datetime.fromisoformat(payload["endAt"]) <= datetime.fromisoformat(payload["startAt"]):
+        if (not allow_invalid_fixed_schedule
+                and datetime.fromisoformat(payload["endAt"]) <= datetime.fromisoformat(payload["startAt"])):
             raise ApiError(503, CODE_SOLAR_UNAVAILABLE, "SOLAR 분석에 실패했어요. 잠시 후 다시 시도해 주세요.")
     return payload
 
@@ -921,7 +923,8 @@ def _validate_unresolved_metadata(metadata: dict) -> tuple[str, str, str, str, l
     action = metadata.get("action")
     entity_type = metadata.get("entityType")
     raw_line_text = metadata.get("rawLineText")
-    candidate_ids = metadata.get("candidateEntityIds")
+    candidate_key = "candidateRequestItemIds" if target_kind == "REQUEST_ITEM" else "candidateEntityIds"
+    candidate_ids = metadata.get(candidate_key)
     if (
         target_kind not in ("ENTITY", "REQUEST_ITEM")
         or action not in ("UPDATE", "DELETE")
@@ -1305,6 +1308,101 @@ def _apply_change_input_result(
     _renumber_items_after_delete(db, sorted(items, key=lambda i: i.item_order))
 
 
+def _normalize_change_fixed_schedule(payload, missing_fields, pending_question):
+    payload, missing = dict(payload), list(missing_fields)
+    start_at, end_at = payload.get("startAt"), payload.get("endAt")
+    if start_at is not None and end_at is not None and datetime.fromisoformat(end_at) <= datetime.fromisoformat(start_at):
+        payload["endAt"] = None
+        missing = [field for field in solar_client.missing_order_for("FIXED_SCHEDULE", "CREATE")
+                   if field in set(missing) | {"endAt"}]
+        pending_question = {"field": missing[0], "message": "종료 시각은 시작 시각보다 늦어야 해요. 종료 시각을 다시 알려 주세요.", "attemptCount": 1}
+    return payload, missing, pending_question
+
+
+def _apply_change_input_operations(
+    db: Session, *, user_id: uuid.UUID, request: SolarRequest, items: list[SolarRequestItem],
+    analysis, raw_line_text: str,
+) -> None:
+    for operation in analysis.operations:
+        if isinstance(operation, solar_client.ChangeInputAddOperation):
+            payload = _sync_remaining_minutes_for_create(operation.normalized_payload, operation.entity_type, SolarAction.CREATE)
+            missing, pending = operation.missing_fields, operation.pending_question
+            if operation.entity_type == "FIXED_SCHEDULE":
+                payload, missing, pending = _normalize_change_fixed_schedule(payload, missing, pending)
+            _create_new_item_from_analysis(
+                db, user_id=user_id, request=request, items=items, action="CREATE",
+                entity_type=operation.entity_type, raw_line_text=operation.raw_line_text,
+                final_payload=payload, missing_fields=missing, pending_question=pending,
+                update_fields=[], target_entity_id=None,
+            )
+            continue
+        if isinstance(operation, solar_client.ChangeInputPatchRequestItemOperation):
+            referenced = _find_item_by_id(operation.request_item_id, items)
+            if referenced is None or referenced.action != SolarAction.CREATE or referenced.entity_type.value != operation.entity_type:
+                raise ApiError(409, CODE_TARGET_AMBIGUOUS, "변경 대상을 다시 선택해 주세요.")
+            _apply_create_merge_patch(referenced, operation.changed_fields, operation.patch, operation.missing_fields)
+            if operation.entity_type == "FIXED_SCHEDULE":
+                payload, missing, pending = _normalize_change_fixed_schedule(
+                    referenced.normalized_payload, referenced.missing_fields, referenced.pending_question
+                )
+                referenced.normalized_payload, referenced.missing_fields, referenced.pending_question = payload, missing, pending
+                referenced.status = SolarItemStatus.INFO_MISSING if missing else SolarItemStatus.READY
+            continue
+        if isinstance(operation, solar_client.ChangeInputDeleteRequestItemOperation):
+            referenced = _find_item_by_id(operation.request_item_id, items)
+            if referenced is None or referenced.entity_type.value != operation.entity_type:
+                raise ApiError(409, CODE_TARGET_AMBIGUOUS, "변경 대상을 다시 선택해 주세요.")
+            items.remove(referenced)
+            db.delete(referenced)
+            continue
+        is_update = isinstance(operation, solar_client.ChangeInputUpdateEntityOperation)
+        target_id = operation.target_entity_id
+        target = _revalidate_target(db, user_id=user_id, plan_cycle_id=request.plan_cycle_id,
+                                    entity_type=operation.entity_type, target_entity_id=target_id)
+        if is_update:
+            adapter = SimpleNamespace(normalized_payload=operation.patch, update_fields=operation.update_fields,
+                                      entity_type=operation.entity_type)
+            payload = _backfill_update_payload(adapter, target, allow_invalid_fixed_schedule=True)
+            missing, pending, fields, action = operation.missing_fields, operation.pending_question, operation.update_fields, "UPDATE"
+            if operation.entity_type == "FIXED_SCHEDULE":
+                payload, missing, pending = _normalize_change_fixed_schedule(payload, missing, pending)
+        else:
+            payload = _snapshot_for_delete(operation.entity_type, target)
+            missing, pending, fields, action = [], None, [], "DELETE"
+        existing = _find_existing_item_for_real_target(operation.entity_type, target_id, items)
+        if existing is not None:
+            _merge_real_target_item(existing, action, payload, fields, missing, pending, raw_line_text)
+        else:
+            _create_new_item_from_analysis(
+                db, user_id=user_id, request=request, items=items, action=action,
+                entity_type=operation.entity_type, raw_line_text=raw_line_text,
+                final_payload=payload, missing_fields=missing, pending_question=pending,
+                update_fields=fields, target_entity_id=target_id,
+            )
+    db.flush()
+    _renumber_items_after_delete(db, sorted(items, key=lambda item: item.item_order))
+
+
+def _persist_change_unresolved(
+    db: Session, *, user_id: uuid.UUID, request: SolarRequest, items: list[SolarRequestItem], unresolved
+) -> tuple[str, dict]:
+    request.status, request.current_item_order = SolarRequestStatus.COLLECTING, None
+    if unresolved.target_kind == "REQUEST_ITEM":
+        action = "UPDATE" if unresolved.intended_operation.value == "PATCH_REQUEST_ITEM" else "DELETE"
+        candidate_ids = list(_filter_request_item_candidates(action, unresolved.entity_type, items).keys())
+        candidate_key = "candidateRequestItemIds"
+    else:
+        action = "UPDATE" if unresolved.intended_operation.value == "UPDATE_ENTITY" else "DELETE"
+        candidates = (_fetch_candidate_tasks(db, user_id, request.plan_cycle_id)
+                      if unresolved.entity_type == "TASK"
+                      else _fetch_candidate_fixed_schedules(db, user_id, request.plan_cycle_id))
+        candidate_ids, candidate_key = [candidate["id"] for candidate in candidates], "candidateEntityIds"
+    metadata = {"unresolved": True, "field": "targetEntityId", "rawLineText": unresolved.raw_line_text,
+                "action": action, "entityType": unresolved.entity_type, "targetKind": unresolved.target_kind,
+                candidate_key: candidate_ids}
+    return unresolved.message, metadata
+
+
 def _persist_still_unresolved(
     db: Session, *, user_id: uuid.UUID, request: SolarRequest, items: list[SolarRequestItem], unresolved
 ) -> tuple[str, dict]:
@@ -1637,11 +1735,14 @@ def add_solar_message(
             if request.status != SolarRequestStatus.CHANGE_INPUT:
                 raise ApiError(409, CODE_INVALID_REQUEST_STATE, "요청 상태가 바뀌었어요. 다시 시도해 주세요.")
 
-            _apply_change_input_result(db, user_id=user_id, request=request, items=items, analysis=result)
+            _apply_change_input_operations(
+                db, user_id=user_id, request=request, items=items, analysis=result,
+                raw_line_text=canonical_message,
+            )
 
-            if result.unresolved_line is not None:
-                content, metadata = _persist_still_unresolved(
-                    db, user_id=user_id, request=request, items=items, unresolved=result.unresolved_line
+            if result.unresolved_operation is not None:
+                content, metadata = _persist_change_unresolved(
+                    db, user_id=user_id, request=request, items=items, unresolved=result.unresolved_operation
                 )
                 entries.append(_assistant_question_entry(content, metadata))
             else:

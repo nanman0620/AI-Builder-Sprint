@@ -11,7 +11,8 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TypeVar
+from enum import Enum
+from typing import TypeAlias, TypeVar
 from zoneinfo import ZoneInfo
 
 from app.core.config import get_solar_api_key, get_solar_base_url, get_solar_model
@@ -87,6 +88,31 @@ _ANSWER_DISPOSITIONS = {"PROVIDED", "DONT_KNOW", "UNCLEAR"}
 
 _UNRESOLVED_ANSWER_TOP_LEVEL_KEYS = {"analysisMessage", "items", "unresolvedLine", "resolvedTargetOnly"}
 
+_CHANGE_INPUT_TOP_LEVEL_KEYS = {"analysisMessage", "operations", "unresolvedOperation"}
+_CHANGE_PENDING_QUESTION_KEYS = {"field", "message", "attemptCount"}
+_CHANGE_ADD_KEYS = {"operationType", "entityType", "rawLineText", "payload", "pendingQuestion"}
+_CHANGE_PATCH_ITEM_KEYS = {
+    "operationType", "requestItemId", "entityType", "changedFields", "patch", "pendingQuestion",
+}
+_CHANGE_DELETE_ITEM_KEYS = {"operationType", "requestItemId", "entityType"}
+_CHANGE_UPDATE_ENTITY_KEYS = {
+    "operationType", "targetEntityId", "entityType", "updateFields", "patch", "pendingQuestion",
+}
+_CHANGE_DELETE_ENTITY_KEYS = {"operationType", "targetEntityId", "entityType"}
+_CHANGE_UNRESOLVED_KEYS = {"intendedOperation", "targetKind", "entityType", "rawLineText", "message"}
+_CHANGE_TASK_ADD_PAYLOAD_KEYS = {
+    "title", "deadlineAt", "deadlineState", "estimatedMinutes", "estimatedMinutesSource",
+    "amountText", "amountSource",
+}
+_CHANGE_TASK_FIELD_KEYS = {
+    "title": {"title"},
+    "deadlineAt": {"deadlineAt", "deadlineState"},
+    "estimatedMinutes": {"estimatedMinutes", "estimatedMinutesSource"},
+    "amount": {"amountText", "amountSource"},
+}
+_CHANGE_TASK_ENTITY_FIELD_KEYS = {**_CHANGE_TASK_FIELD_KEYS, "remainingMinutes": {"remainingMinutes"}}
+_CHANGE_FS_FIELD_KEYS = {"title": {"title"}, "startAt": {"startAt"}, "endAt": {"endAt"}}
+
 
 class SolarUnavailableError(Exception):
     """네트워크 실패·타임아웃·비2xx·JSON 계약 위반을 전부 이 예외 하나로 통일한다.
@@ -146,6 +172,85 @@ class SolarCardAnswerResult:
     answer_disposition: str  # "PROVIDED" | "DONT_KNOW" | "UNCLEAR"
     pending_question_message: str | None
     field_value: dict | None
+
+
+class ChangeInputOperationType(str, Enum):
+    ADD = "ADD"
+    PATCH_REQUEST_ITEM = "PATCH_REQUEST_ITEM"
+    DELETE_REQUEST_ITEM = "DELETE_REQUEST_ITEM"
+    UPDATE_ENTITY = "UPDATE_ENTITY"
+    DELETE_ENTITY = "DELETE_ENTITY"
+
+
+@dataclass(frozen=True)
+class ChangeInputAddOperation:
+    operation_type: ChangeInputOperationType
+    entity_type: str
+    raw_line_text: str
+    normalized_payload: dict
+    missing_fields: list[str]
+    pending_question: dict | None
+
+
+@dataclass(frozen=True)
+class ChangeInputPatchRequestItemOperation:
+    operation_type: ChangeInputOperationType
+    request_item_id: str
+    entity_type: str
+    changed_fields: list[str]
+    patch: dict
+    missing_fields: list[str]
+    pending_question: dict | None
+
+
+@dataclass(frozen=True)
+class ChangeInputDeleteRequestItemOperation:
+    operation_type: ChangeInputOperationType
+    request_item_id: str
+    entity_type: str
+
+
+@dataclass(frozen=True)
+class ChangeInputUpdateEntityOperation:
+    operation_type: ChangeInputOperationType
+    target_entity_id: str
+    entity_type: str
+    update_fields: list[str]
+    patch: dict
+    missing_fields: list[str]
+    pending_question: dict | None
+
+
+@dataclass(frozen=True)
+class ChangeInputDeleteEntityOperation:
+    operation_type: ChangeInputOperationType
+    target_entity_id: str
+    entity_type: str
+
+
+ChangeInputOperation: TypeAlias = (
+    ChangeInputAddOperation
+    | ChangeInputPatchRequestItemOperation
+    | ChangeInputDeleteRequestItemOperation
+    | ChangeInputUpdateEntityOperation
+    | ChangeInputDeleteEntityOperation
+)
+
+
+@dataclass(frozen=True)
+class ChangeInputUnresolvedOperation:
+    intended_operation: ChangeInputOperationType
+    target_kind: str
+    entity_type: str
+    raw_line_text: str
+    message: str
+
+
+@dataclass(frozen=True)
+class ChangeInputAnalysisResult:
+    analysis_message: str
+    operations: list[ChangeInputOperation]
+    unresolved_operation: ChangeInputUnresolvedOperation | None
 
 
 # ---------------------------------------------------------------------------
@@ -550,6 +655,222 @@ def _parse_pending_question_cross_check(
             code="PENDING_FIELD_MISMATCH",
         )
     return {"field": field, "message": message}
+
+
+def _parse_change_pending_question(raw: object, missing_fields: list[str], entity_type: str) -> dict | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise SolarUnavailableError("pendingQuestion must be an object or null")
+    _require_exact_keys(raw, _CHANGE_PENDING_QUESTION_KEYS, "CHANGE_INPUT pendingQuestion")
+    field = _require_non_blank_str(raw["field"], "pendingQuestion.field")
+    message = _require_non_blank_str(raw["message"], "pendingQuestion.message")
+    attempt_count = raw["attemptCount"]
+    if type(attempt_count) is not int or attempt_count < 1:
+        raise SolarUnavailableError("pendingQuestion.attemptCount must be a positive integer")
+    order = _TASK_MISSING_ORDER_CREATE_MERGE if entity_type == "TASK" else _FIXED_SCHEDULE_MISSING_ORDER
+    expected = next((name for name in order if name in missing_fields), None)
+    if expected is None or field != expected:
+        raise SolarUnavailableError("pendingQuestion.field does not match the first missing field", code="PENDING_FIELD_MISMATCH")
+    return {"field": field, "message": message, "attemptCount": attempt_count}
+
+
+def _parse_change_fields(raw: object, allowed: dict[str, set[str]], context: str) -> list[str]:
+    if not isinstance(raw, list) or not raw:
+        raise SolarUnavailableError(f"{context} must be a non-empty array")
+    if any(not isinstance(value, str) or value not in allowed for value in raw):
+        raise SolarUnavailableError(f"{context} contains an unknown field")
+    if len(set(raw)) != len(raw):
+        raise SolarUnavailableError(f"{context} contains a duplicate field")
+    return list(raw)
+
+
+def _validate_change_patch(
+    raw: object, fields: list[str], field_keys: dict[str, set[str]], entity_type: str
+) -> tuple[dict, list[str]]:
+    if not isinstance(raw, dict):
+        raise SolarUnavailableError("patch must be an object")
+    expected_keys: set[str] = set().union(*(field_keys[field] for field in fields))
+    _require_exact_keys(raw, expected_keys, "CHANGE_INPUT patch")
+    patch: dict = {}
+    missing: list[str] = []
+    if "title" in fields:
+        patch["title"], is_missing = _validate_optional_title(raw["title"])
+        if is_missing:
+            missing.append("title")
+    if "deadlineAt" in fields:
+        patch["deadlineAt"], is_missing = _validate_deadline_state(raw["deadlineState"], raw["deadlineAt"])
+        if is_missing:
+            missing.append("deadlineAt")
+    if "estimatedMinutes" in fields:
+        patch["estimatedMinutes"], patch["estimatedMinutesSource"], is_missing = _validate_estimated_minutes(
+            raw["estimatedMinutes"], raw["estimatedMinutesSource"]
+        )
+        if is_missing:
+            missing.append("estimatedMinutes")
+    if "remainingMinutes" in fields:
+        patch["remainingMinutes"], is_missing = _validate_remaining_minutes(raw["remainingMinutes"])
+        if is_missing:
+            missing.append("remainingMinutes")
+    if "amount" in fields:
+        patch["amountText"], patch["amountSource"], is_missing = _validate_amount(
+            raw["amountText"], raw["amountSource"]
+        )
+        if is_missing:
+            missing.append("amount")
+    for field in ("startAt", "endAt"):
+        if field in fields:
+            patch[field] = _resolve_optional_datetime(raw[field])
+            if patch[field] is None:
+                missing.append(field)
+    order = _TASK_MISSING_ORDER_UPDATE if entity_type == "TASK" else _FIXED_SCHEDULE_MISSING_ORDER
+    return patch, [field for field in order if field in missing]
+
+
+def _parse_change_input_operation(
+    raw: object,
+    *,
+    candidate_task_ids: set[str],
+    candidate_fixed_schedule_ids: set[str],
+    candidate_request_items: dict[str, dict],
+) -> ChangeInputOperation:
+    if not isinstance(raw, dict):
+        raise SolarUnavailableError("CHANGE_INPUT operation must be an object")
+    try:
+        operation_type = ChangeInputOperationType(raw.get("operationType"))
+    except (TypeError, ValueError) as exc:
+        raise SolarUnavailableError("invalid CHANGE_INPUT operationType") from exc
+    entity_type = raw.get("entityType")
+    if entity_type not in ("TASK", "FIXED_SCHEDULE"):
+        raise SolarUnavailableError("invalid CHANGE_INPUT entityType")
+
+    if operation_type is ChangeInputOperationType.ADD:
+        _require_exact_keys(raw, _CHANGE_ADD_KEYS, "CHANGE_INPUT ADD")
+        raw_line = _require_non_blank_str(raw["rawLineText"], "rawLineText")
+        payload = raw["payload"]
+        if not isinstance(payload, dict):
+            raise SolarUnavailableError("ADD payload must be an object")
+        if entity_type == "TASK":
+            _require_exact_keys(payload, _CHANGE_TASK_ADD_PAYLOAD_KEYS, "CHANGE_INPUT ADD TASK payload")
+            title, title_missing = _validate_optional_title(payload["title"])
+            deadline, deadline_missing = _validate_deadline_state(payload["deadlineState"], payload["deadlineAt"])
+            estimate, estimate_source, estimate_missing = _validate_estimated_minutes(
+                payload["estimatedMinutes"], payload["estimatedMinutesSource"]
+            )
+            amount, amount_source, amount_missing = _validate_amount(payload["amountText"], payload["amountSource"])
+            normalized = {"title": title, "deadlineAt": deadline, "estimatedMinutes": estimate,
+                          "estimatedMinutesSource": estimate_source, "remainingMinutes": estimate,
+                          "amountText": amount, "amountSource": amount_source}
+            flags = {"title": title_missing, "deadlineAt": deadline_missing,
+                     "estimatedMinutes": estimate_missing, "amount": amount_missing}
+            missing = [field for field in _TASK_MISSING_ORDER_CREATE_MERGE if flags[field]]
+        else:
+            _require_exact_keys(payload, _FS_PAYLOAD_KEYS, "CHANGE_INPUT ADD FIXED_SCHEDULE payload")
+            title, title_missing = _validate_optional_title(payload["title"])
+            start_at, end_at = _resolve_optional_datetime(payload["startAt"]), _resolve_optional_datetime(payload["endAt"])
+            normalized = {"title": title, "startAt": start_at, "endAt": end_at}
+            missing = [field for field, absent in (("title", title_missing), ("startAt", start_at is None),
+                                                    ("endAt", end_at is None)) if absent]
+        pending = _parse_change_pending_question(raw["pendingQuestion"], missing, entity_type)
+        return ChangeInputAddOperation(operation_type, entity_type, raw_line, normalized, missing, pending)
+
+    if operation_type in (ChangeInputOperationType.PATCH_REQUEST_ITEM, ChangeInputOperationType.DELETE_REQUEST_ITEM):
+        keys = _CHANGE_PATCH_ITEM_KEYS if operation_type is ChangeInputOperationType.PATCH_REQUEST_ITEM else _CHANGE_DELETE_ITEM_KEYS
+        _require_exact_keys(raw, keys, f"CHANGE_INPUT {operation_type.value}")
+        request_item_id = _require_non_blank_str(raw["requestItemId"], "requestItemId")
+        if request_item_id in candidate_task_ids or request_item_id in candidate_fixed_schedule_ids:
+            raise SolarUnavailableError("request item ID collides with the entity namespace", code="INVALID_CANDIDATE_NAMESPACE")
+        candidate = candidate_request_items.get(request_item_id)
+        if candidate is None or candidate.get("entityType") != entity_type:
+            raise SolarUnavailableError("request item is outside its candidate namespace", code="INVALID_CANDIDATE_ID")
+        if operation_type is ChangeInputOperationType.DELETE_REQUEST_ITEM:
+            return ChangeInputDeleteRequestItemOperation(operation_type, request_item_id, entity_type)
+        if candidate.get("action") != "CREATE":
+            raise SolarUnavailableError("PATCH_REQUEST_ITEM only accepts CREATE items", code="INVALID_CANDIDATE_ACTION")
+        mapping = _CHANGE_TASK_FIELD_KEYS if entity_type == "TASK" else _CHANGE_FS_FIELD_KEYS
+        fields = _parse_change_fields(raw["changedFields"], mapping, "changedFields")
+        patch, missing = _validate_change_patch(raw["patch"], fields, mapping, entity_type)
+        pending = _parse_change_pending_question(raw["pendingQuestion"], missing, entity_type)
+        return ChangeInputPatchRequestItemOperation(operation_type, request_item_id, entity_type, fields, patch, missing, pending)
+
+    keys = _CHANGE_UPDATE_ENTITY_KEYS if operation_type is ChangeInputOperationType.UPDATE_ENTITY else _CHANGE_DELETE_ENTITY_KEYS
+    _require_exact_keys(raw, keys, f"CHANGE_INPUT {operation_type.value}")
+    target_id = _require_non_blank_str(raw["targetEntityId"], "targetEntityId")
+    if target_id in candidate_request_items:
+        raise SolarUnavailableError("entity ID collides with the request item namespace", code="INVALID_CANDIDATE_NAMESPACE")
+    candidate_ids = candidate_task_ids if entity_type == "TASK" else candidate_fixed_schedule_ids
+    if target_id not in candidate_ids:
+        raise SolarUnavailableError("entity is outside its candidate namespace", code="INVALID_CANDIDATE_ID")
+    if operation_type is ChangeInputOperationType.DELETE_ENTITY:
+        return ChangeInputDeleteEntityOperation(operation_type, target_id, entity_type)
+    mapping = _CHANGE_TASK_ENTITY_FIELD_KEYS if entity_type == "TASK" else _CHANGE_FS_FIELD_KEYS
+    fields = _parse_change_fields(raw["updateFields"], mapping, "updateFields")
+    patch, missing = _validate_change_patch(raw["patch"], fields, mapping, entity_type)
+    pending = _parse_change_pending_question(raw["pendingQuestion"], missing, entity_type)
+    return ChangeInputUpdateEntityOperation(operation_type, target_id, entity_type, fields, patch, missing, pending)
+
+
+def parse_change_input_response(
+    content: str,
+    *,
+    candidate_task_ids: set[str],
+    candidate_fixed_schedule_ids: set[str],
+    candidate_request_items: dict[str, dict],
+) -> ChangeInputAnalysisResult:
+    try:
+        raw = json.loads(content)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise SolarUnavailableError("CHANGE_INPUT response is not JSON") from exc
+    if not isinstance(raw, dict):
+        raise SolarUnavailableError("CHANGE_INPUT response must be an object")
+    _require_exact_keys(raw, _CHANGE_INPUT_TOP_LEVEL_KEYS, "CHANGE_INPUT response")
+    analysis_message = _require_non_blank_str(raw["analysisMessage"], "analysisMessage")
+    operations_raw, unresolved_raw = raw["operations"], raw["unresolvedOperation"]
+    if not isinstance(operations_raw, list):
+        raise SolarUnavailableError("operations must be an array")
+    if bool(operations_raw) == (unresolved_raw is not None):
+        raise SolarUnavailableError("operations and unresolvedOperation must be mutually exclusive")
+    operations = [_parse_change_input_operation(
+        operation, candidate_task_ids=candidate_task_ids,
+        candidate_fixed_schedule_ids=candidate_fixed_schedule_ids,
+        candidate_request_items=candidate_request_items,
+    ) for operation in operations_raw]
+    identities: set[tuple[str, str, str]] = set()
+    for operation in operations:
+        if isinstance(operation, (ChangeInputPatchRequestItemOperation, ChangeInputDeleteRequestItemOperation)):
+            identity = ("REQUEST_ITEM", operation.entity_type, operation.request_item_id)
+        elif isinstance(operation, (ChangeInputUpdateEntityOperation, ChangeInputDeleteEntityOperation)):
+            identity = ("ENTITY", operation.entity_type, operation.target_entity_id)
+        else:
+            continue
+        if identity in identities:
+            raise SolarUnavailableError("duplicate operation target", code="DUPLICATE_OPERATION_TARGET")
+        identities.add(identity)
+    unresolved = None
+    if unresolved_raw is not None:
+        if not isinstance(unresolved_raw, dict):
+            raise SolarUnavailableError("unresolvedOperation must be an object or null")
+        _require_exact_keys(unresolved_raw, _CHANGE_UNRESOLVED_KEYS, "CHANGE_INPUT unresolvedOperation")
+        try:
+            intended = ChangeInputOperationType(unresolved_raw["intendedOperation"])
+        except (TypeError, ValueError) as exc:
+            raise SolarUnavailableError("invalid intendedOperation") from exc
+        target_kind = unresolved_raw["targetKind"]
+        valid_pair = ((intended in (ChangeInputOperationType.PATCH_REQUEST_ITEM, ChangeInputOperationType.DELETE_REQUEST_ITEM)
+                       and target_kind == "REQUEST_ITEM") or
+                      (intended in (ChangeInputOperationType.UPDATE_ENTITY, ChangeInputOperationType.DELETE_ENTITY)
+                       and target_kind == "ENTITY"))
+        if not valid_pair:
+            raise SolarUnavailableError("intendedOperation and targetKind do not match")
+        entity_type = unresolved_raw["entityType"]
+        if entity_type not in ("TASK", "FIXED_SCHEDULE"):
+            raise SolarUnavailableError("invalid unresolved entityType")
+        unresolved = ChangeInputUnresolvedOperation(
+            intended, target_kind, entity_type,
+            _require_non_blank_str(unresolved_raw["rawLineText"], "rawLineText"),
+            _require_non_blank_str(unresolved_raw["message"], "message"),
+        )
+    return ChangeInputAnalysisResult(analysis_message, operations, unresolved)
 
 
 def _parse_item(
@@ -1462,7 +1783,12 @@ def _build_repair_messages(
     ]
 
 
-def _call_and_parse_with_repair(messages: list[dict], parse_fn: Callable[[str], _T]) -> _T:
+def _call_and_parse_with_repair(
+    messages: list[dict],
+    parse_fn: Callable[[str], _T],
+    *,
+    canonicalize_fn: Callable[[str], str] = _canonicalize_response_content,
+) -> _T:
     """`call_solar` → canonicalize → `parse_fn` → (계약 위반 시) 최대 1회 repair → canonicalize →
     `parse_fn` 순서를 모든 analyze_* 진입점이 공유하는 helper. `call_solar`는 이 함수 안에서
     최대 2회(원본 1회 + repair 1회)만 호출된다. timeout·HTTP 오류 등 전송 계층 오류는
@@ -1470,7 +1796,7 @@ def _call_and_parse_with_repair(messages: list[dict], parse_fn: Callable[[str], 
     canonicalize + `parse_fn`을 다시 통과해야 하며, 그래도 실패하면 예외가 그대로 전파돼(저장
     없이) 호출자가 503으로 매핑한다."""
     content = call_solar({"messages": messages})
-    canonical_content = _canonicalize_response_content(content)
+    canonical_content = canonicalize_fn(content)
     try:
         return parse_fn(canonical_content)
     except SolarUnavailableError as first_violation:
@@ -1479,7 +1805,7 @@ def _call_and_parse_with_repair(messages: list[dict], parse_fn: Callable[[str], 
     logger.warning("SOLAR_REPAIR_ATTEMPT code=%s", violation_code)
     repair_messages = _build_repair_messages(messages, content, violation_code)
     repair_content = call_solar({"messages": repair_messages})
-    canonical_repair_content = _canonicalize_response_content(repair_content)
+    canonical_repair_content = canonicalize_fn(repair_content)
     return parse_fn(canonical_repair_content)
 
 
@@ -1793,6 +2119,49 @@ def _build_change_input_prompt_messages(
     ]
 
 
+def _build_change_input_operation_prompt_messages(
+    message: str,
+    *,
+    now: datetime,
+    cycle_start,
+    cycle_end,
+    candidate_tasks: list[dict],
+    candidate_fixed_schedules: list[dict],
+    candidate_request_items: list[dict],
+) -> list[dict]:
+    context = {
+        "now": now.astimezone(_SEOUL_TZ).isoformat(),
+        "cycleStart": cycle_start.isoformat() if cycle_start is not None else None,
+        "cycleEnd": cycle_end.isoformat() if cycle_end is not None else None,
+        "candidateTasks": candidate_tasks,
+        "candidateFixedSchedules": candidate_fixed_schedules,
+        "candidateRequestItems": candidate_request_items,
+    }
+    system_prompt = """You analyze a user's CHANGE_INPUT request. Return one JSON object only.
+The exact top-level keys are analysisMessage, operations, unresolvedOperation. Exactly one of these is populated:
+operations is a non-empty array and unresolvedOperation is null, or operations is [] and unresolvedOperation is an object.
+Allowed operationType values are ADD, PATCH_REQUEST_ITEM, DELETE_REQUEST_ITEM, UPDATE_ENTITY, DELETE_ENTITY.
+ADD exact keys: operationType, entityType, rawLineText, payload, pendingQuestion.
+PATCH_REQUEST_ITEM exact keys: operationType, requestItemId, entityType, changedFields, patch, pendingQuestion.
+DELETE_REQUEST_ITEM exact keys: operationType, requestItemId, entityType.
+UPDATE_ENTITY exact keys: operationType, targetEntityId, entityType, updateFields, patch, pendingQuestion.
+DELETE_ENTITY exact keys: operationType, targetEntityId, entityType.
+TASK ADD payload exact keys: title, deadlineAt, deadlineState, estimatedMinutes, estimatedMinutesSource, amountText, amountSource.
+FIXED_SCHEDULE ADD payload exact keys: title, startAt, endAt.
+For PATCH/UPDATE return only changed storage keys in patch. Logical mappings are title:title; deadlineAt:deadlineAt+deadlineState; estimatedMinutes:estimatedMinutes+estimatedMinutesSource; amount:amountText+amountSource; startAt:startAt; endAt:endAt. UPDATE_ENTITY TASK additionally permits remainingMinutes:remainingMinutes.
+PATCH_REQUEST_ITEM may identify only a CREATE candidateRequestItem. Entity operations may identify only candidateTasks/candidateFixedSchedules. Never mix ID namespaces. Never emit remainingMinutes for ADD or PATCH_REQUEST_ITEM.
+pendingQuestion is null, or exact keys field, message, attemptCount. unresolvedOperation exact keys are intendedOperation, targetKind, entityType, rawLineText, message. PATCH_REQUEST_ITEM/DELETE_REQUEST_ITEM use REQUEST_ITEM; UPDATE_ENTITY/DELETE_ENTITY use ENTITY. Do not return candidate IDs inside unresolvedOperation.
+Do not emit two operations for the same request item or entity. Unknown or additional keys are forbidden."""
+    return [
+        {"role": "system", "content": f"{system_prompt}\n\nContext:\n{json.dumps(context, ensure_ascii=False)}"},
+        {"role": "user", "content": message},
+    ]
+
+
+def _identity_canonicalize(content: str) -> str:
+    return content
+
+
 def analyze_change_input(
     message: str,
     *,
@@ -1803,7 +2172,7 @@ def analyze_change_input(
     candidate_tasks: list[dict] | None = None,
     candidate_fixed_schedules: list[dict] | None = None,
     candidate_request_items: dict[str, dict] | None = None,
-) -> SolarAnalysisResult:
+) -> ChangeInputAnalysisResult:
     """CHANGE_INPUT 전용 진입점. `candidate_request_items`의 값 dict는 파서 검증용
     entityType/action을 최소한 포함해야 하며, 프롬프트 컨텍스트로도 그대로 노출된다."""
     candidate_tasks = candidate_tasks or []
@@ -1811,7 +2180,7 @@ def analyze_change_input(
     candidate_request_items = candidate_request_items or {}
 
     prompt_request_items = [{"id": item_id, **info} for item_id, info in candidate_request_items.items()]
-    messages = _build_change_input_prompt_messages(
+    messages = _build_change_input_operation_prompt_messages(
         message,
         now=now,
         cycle_start=cycle_start,
@@ -1823,14 +2192,12 @@ def analyze_change_input(
     candidate_task_ids = {str(c["id"]) for c in candidate_tasks}
     candidate_fixed_schedule_ids = {str(c["id"]) for c in candidate_fixed_schedules}
 
-    def _parse(content: str) -> SolarAnalysisResult:
-        return parse_solar_response(
+    def _parse(content: str) -> ChangeInputAnalysisResult:
+        return parse_change_input_response(
             content,
-            purpose=purpose,
             candidate_task_ids=candidate_task_ids,
             candidate_fixed_schedule_ids=candidate_fixed_schedule_ids,
-            analysis_mode="CHANGE_INPUT",
             candidate_request_items=candidate_request_items,
         )
 
-    return _call_and_parse_with_repair(messages, _parse)
+    return _call_and_parse_with_repair(messages, _parse, canonicalize_fn=_identity_canonicalize)
