@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.bootstrap import router as bootstrap_router
+from app.api.v1.calendar import router as calendar_router
 from app.api.v1.health import router as health_router
 from app.api.v1.home import router as home_router
 from app.api.v1.me import router as me_router
@@ -35,5 +36,6 @@ app.include_router(me_router, prefix="/api/v1")
 app.include_router(home_router, prefix="/api/v1")
 app.include_router(plan_blocks_router, prefix="/api/v1")
 app.include_router(bootstrap_router, prefix="/api/v1")
+app.include_router(calendar_router, prefix="/api/v1")
 app.include_router(plan_management_router, prefix="/api/v1")
 app.include_router(solar_requests_router, prefix="/api/v1")
