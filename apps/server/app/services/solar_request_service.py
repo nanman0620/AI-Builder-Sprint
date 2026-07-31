@@ -1,11 +1,12 @@
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -25,10 +26,16 @@ from app.models.solar_message import SolarMessage
 from app.models.solar_request import SolarRequest
 from app.models.solar_request_item import SolarRequestItem
 from app.models.task import Task
-from app.services import plan_block_service, solar_client
+from app.services import check_in_service, plan_block_service, solar_client
 
 if TYPE_CHECKING:
     from app.services.plan_management_service import PlanManagementState
+
+logger = logging.getLogger(__name__)
+
+
+class Dispatcher(Protocol):
+    def register(self, request_id: uuid.UUID) -> None: ...
 
 CODE_REQUEST_NOT_FOUND = "REQUEST_NOT_FOUND"
 CODE_ACTIVE_CYCLE_EXISTS = "ACTIVE_CYCLE_EXISTS"
@@ -1832,3 +1839,235 @@ def delete_solar_request(db: Session, *, user_id: uuid.UUID, request_id: uuid.UU
         if request.status not in _DELETABLE_REQUEST_STATUSES:
             raise ApiError(409, CODE_INVALID_REQUEST_STATE, "지금은 삭제할 수 없는 상태예요.")
         db.delete(request)
+
+
+# ---------------------------------------------------------------------------
+# BE-06 — execute / retry / execution 조회 / acknowledge-result
+# ---------------------------------------------------------------------------
+
+CODE_SETTLEMENT_IN_PROGRESS = "SETTLEMENT_IN_PROGRESS"
+
+
+def is_execution_error_retryable(error_code: str | None) -> bool:
+    """FAILED는 상태 전이표(FAILED --retry 검증 성공--> EXECUTING)상 error_code와 무관하게 항상
+    재시도 가능한 MVP 상태 모델이다 — retryable을 저장하는 별도 컬럼이 없다."""
+    return True
+
+
+def _validate_execution_preconditions(db: Session, request: SolarRequest) -> None:
+    """execute/retry 직전 검증. request row lock을 쥔 트랜잭션 안에서만 호출해야 한다 — lock
+    밖에서 먼저 호출하면 검증과 조건부 UPDATE 사이에 cycle·정산·대상이 바뀔 수 있다(TOCTOU).
+    DB를 쓰지 않는다 — 실패하면 ApiError를 raise한다."""
+    if request.purpose == SolarRequestPurpose.NEW_CYCLE:
+        if plan_block_service.get_active_planning_cycle(db, request.user_id) is not None:
+            raise ApiError(409, CODE_ACTIVE_CYCLE_EXISTS, "이미 진행 중인 계획 기간이 있어요.")
+        return
+
+    cycle = plan_block_service.get_active_planning_cycle(db, request.user_id)
+    if cycle is None or cycle.id != request.plan_cycle_id:
+        raise ApiError(409, CODE_CYCLE_NOT_ACTIVE, "계획 기간이 변경됐어요. 다시 시도해 주세요.")
+
+    if check_in_service.get_finalizing_info(db, request.user_id) is not None:
+        raise ApiError(409, CODE_SETTLEMENT_IN_PROGRESS, "정산이 진행 중이에요. 잠시 후 다시 시도해 주세요.")
+
+    for item in _load_items(db, request.id):
+        if item.action == SolarAction.CREATE:
+            continue
+        target_id = item.target_task_id or item.target_fixed_schedule_id
+        _revalidate_target(
+            db,
+            user_id=request.user_id,
+            plan_cycle_id=request.plan_cycle_id,
+            entity_type=item.entity_type.value,
+            target_entity_id=str(target_id),
+        )
+
+
+@dataclass(frozen=True)
+class ExecutionTransitionResult:
+    request: SolarRequest
+    transitioned: bool
+
+
+def _apply_execution_transition_update(
+    db: Session,
+    *,
+    request_id: uuid.UUID,
+    user_id: uuid.UUID,
+    required_status: SolarRequestStatus,
+    now: datetime,
+) -> int:
+    """FINAL_REVIEW/FAILED -> EXECUTING 조건부 단일 UPDATE. 상태와 실행 관련 필드를 한 statement
+    에서 함께 바꾼다(DB 명세 20-5절 원문 SQL과 동일한 필드 집합, updated_at 포함)."""
+    stmt = (
+        update(SolarRequest)
+        .where(
+            SolarRequest.id == request_id,
+            SolarRequest.user_id == user_id,
+            SolarRequest.status == required_status,
+        )
+        .values(
+            status=SolarRequestStatus.EXECUTING,
+            execution_started_at=now,
+            execution_attempt_count=SolarRequest.execution_attempt_count + 1,
+            executed_at=None,
+            execution_result=None,
+            error_code=None,
+            error_message=None,
+            updated_at=now,
+        )
+    )
+    return db.execute(stmt).rowcount
+
+
+def _start_execution(
+    db: Session,
+    *,
+    user_id: uuid.UUID,
+    request_id: uuid.UUID,
+    now: datetime,
+    dispatcher: Dispatcher,
+    required_status: SolarRequestStatus,
+    invalid_state_message: str,
+) -> ExecutionTransitionResult:
+    with db.begin():
+        locked = _lock_owned_solar_request(db, request_id, user_id)
+        if locked.status in (SolarRequestStatus.EXECUTING, SolarRequestStatus.COMPLETED):
+            return ExecutionTransitionResult(request=locked, transitioned=False)
+        if locked.status != required_status:
+            raise ApiError(409, CODE_INVALID_REQUEST_STATE, invalid_state_message)
+
+        _validate_execution_preconditions(db, locked)
+
+        affected = _apply_execution_transition_update(
+            db, request_id=request_id, user_id=user_id, required_status=required_status, now=now
+        )
+        if affected == 1:
+            db.refresh(locked)
+            transitioned = True
+        elif affected == 0:
+            # 동시 execute/retry에 밀렸다 — 최신 상태로 재조회해 멱등 응답을 만든다.
+            db.refresh(locked)
+            transitioned = False
+        else:
+            raise RuntimeError("조건부 UPDATE가 둘 이상의 row에 영향을 줬다 — id는 PK여야 한다.")
+
+    if transitioned:
+        try:
+            dispatcher.register(locked.id)
+        except Exception:
+            # commit은 이미 끝났다 — EXECUTING 상태를 되돌리지 않는다. startup recovery가 재등록한다.
+            logger.exception("solar execution dispatcher 등록 실패 request_id=%s", locked.id)
+
+    return ExecutionTransitionResult(request=locked, transitioned=transitioned)
+
+
+def execute_solar_request(
+    db: Session, *, user_id: uuid.UUID, request_id: uuid.UUID, now: datetime, dispatcher: Dispatcher
+) -> ExecutionTransitionResult:
+    """POST /solar/requests/{id}/execute. FINAL_REVIEW -> EXECUTING."""
+    return _start_execution(
+        db,
+        user_id=user_id,
+        request_id=request_id,
+        now=now,
+        dispatcher=dispatcher,
+        required_status=SolarRequestStatus.FINAL_REVIEW,
+        invalid_state_message="지금은 실행할 수 없는 상태예요.",
+    )
+
+
+def retry_solar_request(
+    db: Session, *, user_id: uuid.UUID, request_id: uuid.UUID, now: datetime, dispatcher: Dispatcher
+) -> ExecutionTransitionResult:
+    """POST /solar/requests/{id}/retry. FAILED -> EXECUTING.
+
+    result_acknowledged_at은 건드리지 않는다 — result_acknowledged_requires_completed CHECK
+    제약상 FAILED 상태에서는 이미 항상 NULL이다.
+    """
+    return _start_execution(
+        db,
+        user_id=user_id,
+        request_id=request_id,
+        now=now,
+        dispatcher=dispatcher,
+        required_status=SolarRequestStatus.FAILED,
+        invalid_state_message="지금은 다시 실행할 수 없는 상태예요.",
+    )
+
+
+@dataclass(frozen=True)
+class SolarExecutionErrorView:
+    code: str
+    message: str
+    retryable: bool
+
+
+@dataclass(frozen=True)
+class SolarExecutionView:
+    request_id: uuid.UUID
+    purpose: SolarRequestPurpose
+    status: SolarRequestStatus
+    screen_mode: PlanManagementScreenMode
+    execution_started_at: datetime | None
+    execution_attempt_count: int
+    executed_at: datetime | None
+    execution_result: dict | None
+    error: SolarExecutionErrorView | None
+
+
+def get_solar_request_execution(
+    db: Session, *, user_id: uuid.UUID, request_id: uuid.UUID
+) -> SolarExecutionView:
+    """GET /solar/requests/{id}/execution. DB의 현재 request 상태를 그대로 반환한다(조회 전용 —
+    상태·시각·attempt count를 변경하지 않음). FAILED일 때만 error를 채운다."""
+    request = get_owned_solar_request(db, request_id, user_id)
+
+    error = None
+    if request.status == SolarRequestStatus.FAILED:
+        error = SolarExecutionErrorView(
+            code=request.error_code or "",
+            message=request.error_message or "",
+            retryable=is_execution_error_retryable(request.error_code),
+        )
+
+    return SolarExecutionView(
+        request_id=request.id,
+        purpose=request.purpose,
+        status=request.status,
+        screen_mode=resolve_current_request_screen_mode(request),
+        execution_started_at=request.execution_started_at,
+        execution_attempt_count=request.execution_attempt_count,
+        executed_at=request.executed_at,
+        execution_result=request.execution_result,
+        error=error,
+    )
+
+
+@dataclass(frozen=True)
+class AcknowledgeExecutionResult:
+    request_id: uuid.UUID
+    result_acknowledged_at: datetime
+    next_screen_mode: PlanManagementScreenMode
+
+
+def acknowledge_solar_execution_result(
+    db: Session, *, user_id: uuid.UUID, request_id: uuid.UUID, now: datetime
+) -> AcknowledgeExecutionResult:
+    """POST /solar/requests/{id}/acknowledge-result. 미확인 COMPLETED 요청만 대상이며 멱등이다."""
+    with db.begin():
+        locked = _lock_owned_solar_request(db, request_id, user_id)
+        if locked.status != SolarRequestStatus.COMPLETED:
+            raise ApiError(409, CODE_INVALID_REQUEST_STATE, "확인할 결과가 없어요.")
+
+        if locked.result_acknowledged_at is None:
+            locked.result_acknowledged_at = now
+            db.flush()
+        acknowledged_at = locked.result_acknowledged_at
+
+        active_cycle = plan_block_service.get_active_planning_cycle(db, user_id)
+        next_mode = resolve_no_request_screen_mode(has_active_cycle=active_cycle is not None)
+
+    return AcknowledgeExecutionResult(
+        request_id=locked.id, result_acknowledged_at=acknowledged_at, next_screen_mode=next_mode
+    )
