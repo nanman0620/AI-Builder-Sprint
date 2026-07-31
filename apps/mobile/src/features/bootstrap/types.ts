@@ -41,7 +41,8 @@ export type PlanPeriod = 'MORNING' | 'AFTERNOON' | 'EVENING';
 export type HomeMode = 'NO_ACTIVE_CYCLE' | 'NO_PLANS' | 'IN_PROGRESS' | 'FINALIZING' | 'CHECK_IN_RESULT';
 
 // GET /bootstrap과 GET /home/current가 공통으로 쓰는 홈 하위 구조. 두 endpoint 모두 이 타입들을
-// 그대로 참조하며 중복 정의하지 않는다(홈 전용 응답 타입 HomeCurrentResponse·CheckInResult는 src/features/home/types.ts 소유).
+// 그대로 참조하며 중복 정의하지 않는다(홈 전용 응답 envelope인 HomeCurrentResponse만
+// src/features/home/types.ts 소유 — finalizing·checkInResult를 포함한 필드 타입은 이 파일 소유).
 export type HomeProgress = {
   checkedCount: number;
   totalCount: number;
@@ -77,6 +78,45 @@ export type HomeBlockingNotice = {
   items: DeadlineWarningItem[];
 };
 
+// homeMode=FINALIZING일 때만 채워진다. bootstrap.home과 GET /home/current 모두 서버가 같은
+// to_home_current_response 계산 결과를 그대로 내려주므로(BE-11), 두 응답이 공통으로 쓰는 이 타입도
+// bootstrap/types.ts에 둔다. home/types.ts는 이 타입을 재수출만 한다(순환 참조 금지, 위 43행 주석 참고).
+export type FinalizingInfo = {
+  checkInId: string;
+  checkDate: string;
+  period: PlanPeriod;
+  finalizationStartedAt: string;
+};
+
+export type CheckInPlanStatus = 'COMPLETED' | 'NOT_DONE';
+
+// completedPlans/notDonePlans 항목. 현재 분기 PlanBlock(HomePlanBlock)과 달리 정산 후 결과 표시용
+// 축약 필드만 내려온다(displayOrder 등 정렬 정보 없음).
+export type CheckInPlanBlockSummary = {
+  id: string;
+  displayTitle: string;
+  status: CheckInPlanStatus;
+};
+
+// homeMode=CHECK_IN_RESULT일 때만 채워진다. FinalizingInfo와 같은 이유로 여기 둔다.
+export type CheckInResult = {
+  id: string;
+  checkDate: string;
+  period: PlanPeriod;
+  totalPlanCount: number;
+  completedPlanCount: number;
+  notDonePlanCount: number;
+  score: number;
+  replanUnplacedMinutes: number;
+  finalizedAt: string;
+  cycleEnded: boolean;
+  completedPlans: CheckInPlanBlockSummary[];
+  notDonePlans: CheckInPlanBlockSummary[];
+};
+
+// bootstrap.data.home은 서버가 GET /home/current와 동일한 HomeCurrentOut 계산 결과를 그대로
+// 내려주므로(BE-11 app/schemas/bootstrap.py의 to_home_current_response 재사용), finalizing·
+// checkInResult도 GET /home/current와 똑같이 포함된다 — GET /home/current 전용이 아니다.
 export type BootstrapHome = {
   logicalDate: string;
   period: PlanPeriod;
@@ -85,6 +125,8 @@ export type BootstrapHome = {
   activeCycle: BootstrapActiveCycle | null;
   progress: HomeProgress | null;
   planBlocks: HomePlanBlock[];
+  finalizing: FinalizingInfo | null;
+  checkInResult: CheckInResult | null;
 };
 
 export type BootstrapProfile = {
