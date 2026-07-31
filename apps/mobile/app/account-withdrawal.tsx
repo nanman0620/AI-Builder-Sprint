@@ -4,10 +4,14 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 
 import { colors, spacing, typography } from '@/src/constants/tokens';
 import { AuthSubmitButton } from '@/src/features/auth/components/auth-submit-button';
+import { useAppSync } from '@/src/features/app-sync/app-sync-context';
 import { signOut } from '@/src/features/auth/services/auth-service';
+import { useBootstrap } from '@/src/features/bootstrap/bootstrap-context';
 
 export default function AccountWithdrawalScreen() {
   const router = useRouter();
+  const { reset: resetAppSync } = useAppSync();
+  const { reset: resetBootstrap } = useBootstrap();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   async function handleCancel() {
@@ -21,6 +25,8 @@ export default function AccountWithdrawalScreen() {
 
     setIsSubmitting(true);
     try {
+      resetAppSync();
+      resetBootstrap();
       await signOut();
       Alert.alert('회원탈퇴 완료', '회원탈퇴가 완료되었습니다.', [
         {

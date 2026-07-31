@@ -5,7 +5,9 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 
 import { ErrorView } from '@/src/components/common/error-view';
 import { colors, spacing, typography } from '@/src/constants/tokens';
+import { useAppSync } from '@/src/features/app-sync/app-sync-context';
 import { signOut } from '@/src/features/auth/services/auth-service';
+import { useBootstrap } from '@/src/features/bootstrap/bootstrap-context';
 import { getProfile } from '@/src/features/settings/api';
 import { LogoutConfirmModal } from '@/src/features/settings/components/LogoutConfirmModal';
 import { ProfileCard } from '@/src/features/settings/components/ProfileCard';
@@ -13,6 +15,8 @@ import type { Profile } from '@/src/features/settings/types';
 
 export default function SettingsScreen() {
   const router = useRouter();
+  const { epochs, reset: resetAppSync, resetEpoch } = useAppSync();
+  const { reset: resetBootstrap } = useBootstrap();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -22,6 +26,10 @@ export default function SettingsScreen() {
   const profileRef = useRef<Profile | null>(null);
   const isMountedRef = useRef(true);
   const inFlightRef = useRef<Promise<void> | null>(null);
+  const loadGenerationRef = useRef(0);
+  const isFocusedRef = useRef(false);
+  const seenRefreshEpochRef = useRef(epochs.profile);
+  const seenResetEpochRef = useRef(resetEpoch);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -43,23 +51,27 @@ export default function SettingsScreen() {
       }
     }
 
+    const generation = loadGenerationRef.current;
     const request = getProfile()
       .then((response) => {
+        if (generation !== loadGenerationRef.current) {
+          return;
+        }
         profileRef.current = response;
-        if (isMountedRef.current) {
+        if (isMountedRef.current && generation === loadGenerationRef.current) {
           setProfile(response);
         }
       })
       .catch(() => {
-        if (isMountedRef.current) {
-          setLoadError(
-            profileRef.current ? '프로필을 새로 불러오지 못했습니다.' : '정보를 불러오지 못했어요.'
-          );
+        if (isMountedRef.current && generation === loadGenerationRef.current) {
+          setLoadError('정보를 불러오지 못했어요.\n잠시 후 다시 시도해 주세요.');
         }
       })
       .finally(() => {
-        inFlightRef.current = null;
-        if (isMountedRef.current) {
+        if (inFlightRef.current === request) {
+          inFlightRef.current = null;
+        }
+        if (isMountedRef.current && generation === loadGenerationRef.current) {
           setIsLoading(false);
         }
       });
@@ -70,9 +82,38 @@ export default function SettingsScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      isFocusedRef.current = true;
       void loadProfile();
+      return () => {
+        isFocusedRef.current = false;
+      };
     }, [loadProfile])
   );
+
+  useEffect(() => {
+    if (seenRefreshEpochRef.current === epochs.profile) {
+      return;
+    }
+    seenRefreshEpochRef.current = epochs.profile;
+    if (isFocusedRef.current) {
+      void loadProfile();
+    }
+  }, [epochs.profile, loadProfile]);
+
+  useEffect(() => {
+    if (seenResetEpochRef.current === resetEpoch) {
+      return;
+    }
+    seenResetEpochRef.current = resetEpoch;
+    isFocusedRef.current = false;
+    loadGenerationRef.current += 1;
+    inFlightRef.current = null;
+    profileRef.current = null;
+    setProfile(null);
+    setIsLoading(true);
+    setLoadError(null);
+    setLogoutError(null);
+  }, [resetEpoch]);
 
   async function handleLogout() {
     if (isSubmitting) {
@@ -81,6 +122,8 @@ export default function SettingsScreen() {
     setIsSubmitting(true);
     setLogoutError(null);
     try {
+      resetAppSync();
+      resetBootstrap();
       await signOut();
       router.replace('/(auth)/login');
     } catch {
@@ -116,7 +159,14 @@ export default function SettingsScreen() {
               <Text style={styles.menuText}>회원탈퇴</Text>
             </Pressable>
             {logoutError ? <Text style={styles.errorText}>{logoutError}</Text> : null}
-            {loadError && profile ? <Text style={styles.errorText}>{loadError}</Text> : null}
+            {loadError && profile ? (
+              <View style={styles.refreshError}>
+                <Text style={styles.errorText}>{loadError}</Text>
+                <Pressable disabled={isLoading} onPress={() => void loadProfile()}>
+                  <Text style={styles.retryText}>다시 시도</Text>
+                </Pressable>
+              </View>
+            ) : null}
           </View>
         </>
       )}
@@ -171,6 +221,15 @@ const styles = StyleSheet.create({
   errorText: {
     ...typography.body,
     color: colors.error,
+    marginTop: spacing.sm,
+  },
+  refreshError: {
+    marginTop: spacing.sm,
+  },
+  retryText: {
+    ...typography.body,
+    color: colors.primary,
+    fontWeight: '700',
     marginTop: spacing.sm,
   },
 });

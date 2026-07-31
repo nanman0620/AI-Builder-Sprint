@@ -2,6 +2,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiClientError } from '@/src/services/api/client';
+import { useAppSync } from '@/src/features/app-sync/app-sync-context';
 
 import { getPlanManagementState } from '../api/plan-management-state';
 import {
@@ -9,7 +10,6 @@ import {
   createSolarRequest,
   deleteSolarRequest,
   executeSolarRequest,
-  getSolarRequestExecution,
   reopenSolarRequest,
   retrySolarRequest,
   sendSolarMessage,
@@ -28,16 +28,19 @@ const GENERIC_ACTION_ERROR_MESSAGE = '정보를 불러오지 못했어요. 잠�
 const EXECUTION_REFRESH_ERROR_MESSAGE =
   '진행 상태를 확인하지 못했어요.\n작업은 계속 진행 중일 수 있어요.';
 
-// 최종 API는 polling 간격을 반환하지 않는다. 저장소의 기존 FINALIZING polling 정책과
-// 같은 5초를 사용해 일시적 오류 때 과도한 재호출을 피한다.
-export const EXECUTION_POLL_INTERVAL_MS = 5000;
-
 const EXECUTION_STATE_ERROR_CODES = new Set([
   'INVALID_REQUEST_STATE',
   'REQUEST_ALREADY_EXECUTING',
 ]);
 
 export function usePlanManagement() {
+  const {
+    epochs,
+    executionEvent,
+    refreshExecutionNow,
+    resetEpoch,
+    watchExecution,
+  } = useAppSync();
   const [state, setState] = useState<PlanManagementState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasLoadError, setHasLoadError] = useState(false);
@@ -49,19 +52,33 @@ export function usePlanManagement() {
   const pendingActionRef = useRef<string | null>(null);
   const stateRef = useRef<PlanManagementState | null>(null);
   const isActiveRef = useRef(false);
-  const executionInFlightRef = useRef<{
-    requestId: string;
-    promise: Promise<void>;
-  } | null>(null);
-  const executionPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isMountedRef = useRef(true);
+  const stateInFlightRef = useRef<Promise<PlanManagementState | null> | null>(null);
+  const stateRequestIdRef = useRef(0);
+  const seenRefreshEpochRef = useRef(epochs.planManagement);
+  const seenExecutionEventRef = useRef(0);
+  const seenResetEpochRef = useRef(resetEpoch);
   const deletedFailedRequestIdRef = useRef<string | null>(null);
-  const refreshExecutionRef = useRef<(requestId: string) => Promise<void>>(() =>
-    Promise.resolve()
-  );
 
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  useEffect(() => {
+    if (state?.screenMode === 'EXECUTING' && state.request) {
+      watchExecution(state.request.id);
+    } else if (state) {
+      watchExecution(null);
+    }
+  }, [state, watchExecution]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      stateRequestIdRef.current += 1;
+    };
+  }, []);
 
   const beginAction = useCallback((key: string) => {
     if (pendingActionRef.current) {
@@ -79,36 +96,15 @@ export function usePlanManagement() {
     }
   }, []);
 
-  const clearExecutionPollTimer = useCallback(() => {
-    if (executionPollTimerRef.current) {
-      clearTimeout(executionPollTimerRef.current);
-      executionPollTimerRef.current = null;
-    }
+  const applyMutationState = useCallback((result: PlanManagementState) => {
+    stateRequestIdRef.current += 1;
+    stateInFlightRef.current = null;
+    setState(result);
   }, []);
 
-  const scheduleExecutionPoll = useCallback(
-    (requestId: string) => {
-      clearExecutionPollTimer();
-      if (!isActiveRef.current) {
-        return;
-      }
-      executionPollTimerRef.current = setTimeout(() => {
-        executionPollTimerRef.current = null;
-        const current = stateRef.current;
-        if (
-          !isActiveRef.current ||
-          current?.screenMode !== 'EXECUTING' ||
-          current.request?.id !== requestId
-        ) {
-          return;
-        }
-        void refreshExecutionRef.current(requestId);
-      }, EXECUTION_POLL_INTERVAL_MS);
-    },
-    [clearExecutionPollTimer]
-  );
-
   const applyExecutionResponse = useCallback((result: ExecutionStatusResponse) => {
+    stateRequestIdRef.current += 1;
+    stateInFlightRef.current = null;
     setState((previous) => {
       if (!previous?.request || previous.request.id !== result.requestId) {
         return previous;
@@ -132,129 +128,129 @@ export function usePlanManagement() {
   }, []);
 
   const refreshExecution = useCallback(
-    (requestId: string): Promise<void> => {
-      const existingRequest = executionInFlightRef.current;
-      if (existingRequest?.requestId === requestId) {
-        return existingRequest.promise;
-      }
-
+    async (requestId: string): Promise<void> => {
       setIsExecutionRefreshing(true);
-      const run = async () => {
-        try {
-          const result = await getSolarRequestExecution(requestId);
-          if (!isActiveRef.current) {
-            return;
-          }
-          setExecutionRefreshError(null);
-          applyExecutionResponse(result);
-          if (result.status === 'EXECUTING') {
-            scheduleExecutionPoll(requestId);
-          } else {
-            clearExecutionPollTimer();
-          }
-        } catch (error) {
-          if (!isActiveRef.current) {
-            return;
-          }
-          // HTTP/API 조회 오류와 data.error(실제 FAILED)는 서로 다른 경로다. 이 catch는
-          // 기존 EXECUTING 화면을 유지하며 서버 작업 실패로 매핑하지 않는다.
-          setExecutionRefreshError(
-            error instanceof ApiClientError && error.code === 'REQUEST_NOT_FOUND'
-              ? error.message
-              : EXECUTION_REFRESH_ERROR_MESSAGE
-          );
-          const current = stateRef.current;
-          if (
-            current?.screenMode === 'EXECUTING' &&
-            current.request?.id === requestId
-          ) {
-            scheduleExecutionPoll(requestId);
-          }
+      try {
+        await refreshExecutionNow(requestId);
+      } finally {
+        if (isMountedRef.current) {
+          setIsExecutionRefreshing(false);
         }
-      };
-
-      const promise = run().finally(() => {
-        if (executionInFlightRef.current?.promise === promise) {
-          executionInFlightRef.current = null;
-          if (isActiveRef.current) {
-            setIsExecutionRefreshing(false);
-          }
-        }
-      });
-      executionInFlightRef.current = { requestId, promise };
-      return promise;
+      }
     },
-    [applyExecutionResponse, clearExecutionPollTimer, scheduleExecutionPoll]
+    [refreshExecutionNow]
   );
-
-  useEffect(() => {
-    refreshExecutionRef.current = refreshExecution;
-  }, [refreshExecution]);
 
   // GET /plan-management/state 하나로 screenMode와 request 전체(messages/requestItems/...)를
   // 함께 받으므로, 상태 복원을 위해 GET /solar/requests/{id}를 추가로 호출하지 않는다.
-  const load = useCallback(async (): Promise<PlanManagementState | null> => {
+  const load = useCallback((): Promise<PlanManagementState | null> => {
+    if (stateInFlightRef.current) {
+      return stateInFlightRef.current;
+    }
+    const requestId = ++stateRequestIdRef.current;
     setIsLoading(true);
     setHasLoadError(false);
-    try {
-      const result = await getPlanManagementState();
-      setState(result);
-      return result;
-    } catch {
-      setHasLoadError(true);
-      return null;
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+    const run = async () => {
+      try {
+        const result = await getPlanManagementState();
+        if (!isMountedRef.current || requestId !== stateRequestIdRef.current) {
+          return null;
+        }
+        setState(result);
+        if (result.screenMode === 'EXECUTING' && result.request) {
+          watchExecution(result.request.id);
+        }
+        return result;
+      } catch {
+        if (isMountedRef.current && requestId === stateRequestIdRef.current) {
+          setHasLoadError(true);
+        }
+        return null;
+      } finally {
+        if (isMountedRef.current && requestId === stateRequestIdRef.current) {
+          setIsLoading(false);
+        }
+      }
+    };
+    const promise = run().finally(() => {
+      if (stateInFlightRef.current === promise) {
+        stateInFlightRef.current = null;
+      }
+    });
+    stateInFlightRef.current = promise;
+    return promise;
+  }, [watchExecution]);
 
   const reloadAfterInvalidState = useCallback(async () => {
-    try {
-      const result = await getPlanManagementState();
-      setState(result);
-    } catch {
+    const result = await load();
+    if (!result) {
       // 재조회도 실패하면 마지막으로 확인한 화면과 요청을 유지한다.
       setActionError(GENERIC_ACTION_ERROR_MESSAGE);
     }
-  }, []);
+  }, [load]);
 
-  // 탭 포커스마다 최신 screenMode를 복원한다. 실행 관련 모드라면 같은 requestId의
-  // execution GET으로 상세 결과를 확인하고, EXECUTING일 때만 polling을 이어간다.
+  // 탭 포커스마다 최신 screenMode를 복원한다. EXECUTING 감시는 AppSyncProvider가
+  // 앱 공통 영역에서 소유하므로 blur 시 중단하지 않는다.
   useFocusEffect(
     useCallback(() => {
       isActiveRef.current = true;
-      void load().then((result) => {
-        const executionState = result ?? stateRef.current;
-        if (
-          executionState?.request &&
-          (executionState.screenMode === 'EXECUTING' ||
-            executionState.screenMode === 'EXECUTION_SUCCESS' ||
-            executionState.screenMode === 'EXECUTION_FAILED')
-        ) {
-          void refreshExecutionRef.current(executionState.request.id);
-        }
-      });
+      void load();
       return () => {
         isActiveRef.current = false;
-        clearExecutionPollTimer();
       };
-    }, [clearExecutionPollTimer, load])
+    }, [load])
   );
 
-  const executionRequestId = state?.request?.id ?? null;
-  const shouldPollExecution = state?.screenMode === 'EXECUTING' && !!executionRequestId;
+  useEffect(() => {
+    if (seenRefreshEpochRef.current === epochs.planManagement) {
+      return;
+    }
+    seenRefreshEpochRef.current = epochs.planManagement;
+    if (isActiveRef.current) {
+      void load();
+    }
+  }, [epochs.planManagement, load]);
 
   useEffect(() => {
-    clearExecutionPollTimer();
-    if (isActiveRef.current && shouldPollExecution && executionRequestId) {
-      scheduleExecutionPoll(executionRequestId);
+    if (!executionEvent || seenExecutionEventRef.current === executionEvent.sequence) {
+      return;
     }
-  }, [
-    clearExecutionPollTimer,
-    executionRequestId,
-    scheduleExecutionPoll,
-    shouldPollExecution,
-  ]);
+    seenExecutionEventRef.current = executionEvent.sequence;
+    const current = stateRef.current;
+    if (!current?.request || current.request.id !== executionEvent.requestId) {
+      return;
+    }
+    if (executionEvent.failedToRefresh) {
+      if (current.screenMode === 'EXECUTING') {
+        setExecutionRefreshError(EXECUTION_REFRESH_ERROR_MESSAGE);
+      }
+      return;
+    }
+    if (executionEvent.result) {
+      setExecutionRefreshError(null);
+      applyExecutionResponse(executionEvent.result);
+    }
+  }, [applyExecutionResponse, executionEvent]);
+
+  useEffect(() => {
+    if (seenResetEpochRef.current === resetEpoch) {
+      return;
+    }
+    seenResetEpochRef.current = resetEpoch;
+    isActiveRef.current = false;
+    stateRequestIdRef.current += 1;
+    stateInFlightRef.current = null;
+    stateRef.current = null;
+    setState(null);
+    setIsLoading(true);
+    setHasLoadError(false);
+    setActionError(null);
+    setExitError(null);
+    setExecutionRefreshError(null);
+    setIsExecutionRefreshing(false);
+    pendingActionRef.current = null;
+    setIsSubmitting(false);
+  }, [resetEpoch]);
 
   const submitInitialMessage = useCallback(
     async (purpose: RequestPurpose, message: string) => {
@@ -267,7 +263,7 @@ export function usePlanManagement() {
           clientEventId: generateClientEventId(),
           message,
         });
-        setState(result);
+        applyMutationState(result);
       } catch (error) {
         if (error instanceof ApiClientError && error.code === 'ACTIVE_REQUEST_EXISTS') {
           // 이미 진행 중인 요청이 있으면 새로 만들지 않고 GET /plan-management/state로
@@ -281,7 +277,7 @@ export function usePlanManagement() {
         finishAction(actionKey);
       }
     },
-    [beginAction, finishAction, load]
+    [applyMutationState, beginAction, finishAction, load]
   );
 
   const sendAnswer = useCallback(
@@ -296,7 +292,7 @@ export function usePlanManagement() {
           clientEventId: generateClientEventId(),
           message,
         });
-        setState(result);
+        applyMutationState(result);
       } catch (error) {
         if (error instanceof ApiClientError && error.code === 'INVALID_REQUEST_STATE') {
           await reloadAfterInvalidState();
@@ -308,7 +304,7 @@ export function usePlanManagement() {
         finishAction(actionKey);
       }
     },
-    [beginAction, finishAction, reloadAfterInvalidState, state]
+    [applyMutationState, beginAction, finishAction, reloadAfterInvalidState, state]
   );
 
   const submitDecision = useCallback(
@@ -323,7 +319,7 @@ export function usePlanManagement() {
           clientEventId: generateClientEventId(),
           decision,
         });
-        setState(result);
+        applyMutationState(result);
       } catch (error) {
         if (error instanceof ApiClientError && error.code === 'INVALID_REQUEST_STATE') {
           await reloadAfterInvalidState();
@@ -334,7 +330,7 @@ export function usePlanManagement() {
         finishAction(actionKey);
       }
     },
-    [beginAction, finishAction, reloadAfterInvalidState, state]
+    [applyMutationState, beginAction, finishAction, reloadAfterInvalidState, state]
   );
 
   const reopenRequest = useCallback(async () => {
@@ -345,7 +341,7 @@ export function usePlanManagement() {
     setActionError(null);
     try {
       const result = await reopenSolarRequest(requestId);
-      setState(result);
+      applyMutationState(result);
     } catch (error) {
       if (error instanceof ApiClientError && error.code === 'INVALID_REQUEST_STATE') {
         await reloadAfterInvalidState();
@@ -355,10 +351,12 @@ export function usePlanManagement() {
     } finally {
       finishAction(actionKey);
     }
-  }, [beginAction, finishAction, reloadAfterInvalidState, state]);
+  }, [applyMutationState, beginAction, finishAction, reloadAfterInvalidState, state]);
 
   const setExecutingState = useCallback((result: ExecutionStartResponse) => {
     setExecutionRefreshError(null);
+    stateRequestIdRef.current += 1;
+    stateInFlightRef.current = null;
     setState((previous) => {
       if (!previous?.request || previous.request.id !== result.requestId) {
         return previous;
@@ -486,7 +484,7 @@ export function usePlanManagement() {
         deletedFailedRequestIdRef.current = requestId;
       }
       const result = await getPlanManagementState();
-      setState(result);
+      applyMutationState(result);
       deletedFailedRequestIdRef.current = null;
     } catch (error) {
       if (error instanceof ApiClientError && error.code === 'INVALID_REQUEST_STATE') {
@@ -499,7 +497,7 @@ export function usePlanManagement() {
     } finally {
       finishAction(actionKey);
     }
-  }, [beginAction, finishAction, reloadAfterInvalidState, state]);
+  }, [applyMutationState, beginAction, finishAction, reloadAfterInvalidState, state]);
 
   const deleteCurrentRequest = useCallback(async () => {
     if (!state?.request) return false;
@@ -509,6 +507,8 @@ export function usePlanManagement() {
     setExitError(null);
     try {
       await deleteSolarRequest(requestId);
+      stateRequestIdRef.current += 1;
+      stateInFlightRef.current = null;
       setState(null);
       return true;
     } catch (error) {

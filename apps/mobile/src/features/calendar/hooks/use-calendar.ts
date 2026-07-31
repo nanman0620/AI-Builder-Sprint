@@ -1,6 +1,7 @@
 import { useFocusEffect } from '@react-navigation/native';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { useAppSync } from '@/src/features/app-sync/app-sync-context';
 import { getCalendar } from '../api';
 import {
   CalendarRequestOwnership,
@@ -18,6 +19,7 @@ function currentDeviceMonthRange(): CalendarDateRange {
 }
 
 export function useCalendar() {
+  const { epochs, resetEpoch } = useAppSync();
   const [data, setData] = useState<CalendarResponse | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -28,6 +30,8 @@ export function useCalendar() {
   const ownershipRef = useRef(new CalendarRequestOwnership());
   const inFlightRef = useRef<{ promise: Promise<void>; ticket: CalendarRequestTicket } | null>(null);
   const retryRangeRef = useRef<CalendarDateRange | null>(null);
+  const seenRefreshEpochRef = useRef(epochs.calendar);
+  const seenResetEpochRef = useRef(resetEpoch);
 
   const loadRange = useCallback((requestedRange: CalendarDateRange, initial = false): Promise<void> => {
     const ownership = ownershipRef.current;
@@ -108,6 +112,37 @@ export function useCalendar() {
       };
     }, [loadRange])
   );
+
+  useEffect(() => {
+    if (seenRefreshEpochRef.current === epochs.calendar) {
+      return;
+    }
+    seenRefreshEpochRef.current = epochs.calendar;
+    if (!isActiveRef.current) {
+      return;
+    }
+    const current = dataRef.current;
+    void loadRange(
+      current ? { from: current.from, to: current.to } : currentDeviceMonthRange(),
+      !current
+    );
+  }, [epochs.calendar, loadRange]);
+
+  useEffect(() => {
+    if (seenResetEpochRef.current === resetEpoch) {
+      return;
+    }
+    seenResetEpochRef.current = resetEpoch;
+    isActiveRef.current = false;
+    ownershipRef.current.invalidateFocus();
+    inFlightRef.current = null;
+    retryRangeRef.current = null;
+    dataRef.current = null;
+    setData(null);
+    setSelectedDate(null);
+    setIsLoading(true);
+    setRefreshError(false);
+  }, [resetEpoch]);
 
   const moveMonth = useCallback(
     (offset: -1 | 1) => {
