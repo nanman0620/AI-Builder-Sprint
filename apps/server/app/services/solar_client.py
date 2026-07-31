@@ -8,12 +8,16 @@ import logging
 import re
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TypeVar
 from zoneinfo import ZoneInfo
 
 from app.core.config import get_solar_api_key, get_solar_base_url, get_solar_model
 from app.models.enums import SolarRequestPurpose
+
+_T = TypeVar("_T")
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +28,10 @@ _RFC3339_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?
 
 _TASK_MISSING_ORDER_CREATE = ["deadlineAt", "estimatedMinutes", "amount"]
 _TASK_MISSING_ORDER_UPDATE = ["title", "deadlineAt", "estimatedMinutes", "remainingMinutes", "amount"]
+# CHANGE_INPUT의 CREATE+REQUEST_ITEM(기존 대기 CREATE 카드 patch) 전용 — title이 소프트해질 수
+# 있다는 점에서 plain CREATE와 다르고(그래서 UPDATE 순서 기반), remainingMinutes는 CREATE 카드에
+# 독립 필드가 아니라서 제외한다.
+_TASK_MISSING_ORDER_CREATE_MERGE = [f for f in _TASK_MISSING_ORDER_UPDATE if f != "remainingMinutes"]
 _FIXED_SCHEDULE_MISSING_ORDER = ["title", "startAt", "endAt"]
 
 _TASK_UPDATE_FIELD_NAMES = {"title", "deadlineAt", "estimatedMinutes", "remainingMinutes", "amount"}
@@ -50,6 +58,35 @@ _TASK_PAYLOAD_KEYS = {
 }
 _FS_PAYLOAD_KEYS = {"title", "startAt", "endAt"}
 
+# CHANGE_INPUT 전용: 기존 item 키 집합에 targetKind만 추가한 변형(그 외 모드에는 없는 키).
+_CHANGE_INPUT_TASK_CREATE_ITEM_KEYS = _TASK_CREATE_ITEM_KEYS | {"targetKind"}
+_CHANGE_INPUT_TASK_UPDATE_ITEM_KEYS = _TASK_UPDATE_ITEM_KEYS | {"targetKind"}
+_CHANGE_INPUT_TASK_DELETE_ITEM_KEYS = _TASK_DELETE_ITEM_KEYS | {"targetKind"}
+_CHANGE_INPUT_FS_CREATE_ITEM_KEYS = _FS_CREATE_ITEM_KEYS | {"targetKind"}
+_CHANGE_INPUT_FS_UPDATE_ITEM_KEYS = _FS_UPDATE_ITEM_KEYS | {"targetKind"}
+_CHANGE_INPUT_FS_DELETE_ITEM_KEYS = _FS_DELETE_ITEM_KEYS | {"targetKind"}
+
+# CHANGE_INPUT의 CREATE+REQUEST_ITEM(기존 대기 CREATE 카드 수정) 전용 — action은 CREATE로
+# 유지하면서 changedFields로 부분 patch를 표현하는 하이브리드 키 집합.
+_CHANGE_INPUT_TASK_CREATE_MERGE_ITEM_KEYS = {
+    "entityType", "action", "targetEntityId", "targetKind", "rawLineText",
+    "deadlineState", "normalizedPayload", "pendingQuestion", "changedFields",
+}
+_CHANGE_INPUT_FS_CREATE_MERGE_ITEM_KEYS = {
+    "entityType", "action", "targetEntityId", "targetKind", "rawLineText",
+    "normalizedPayload", "pendingQuestion", "changedFields",
+}
+# CREATE 카드는 remainingMinutes가 독립 필드가 아니라(estimatedMinutes에서 항상 파생) changedFields
+# 대상에서 제외한다.
+_TASK_CREATE_MERGE_FIELD_NAMES = _TASK_UPDATE_FIELD_NAMES - {"remainingMinutes"}
+
+_CHANGE_INPUT_UNRESOLVED_LINE_KEYS = _UNRESOLVED_LINE_KEYS | {"targetKind"}
+
+_CARD_ANSWER_TOP_LEVEL_KEYS = {"analysisMessage", "answerDisposition", "pendingQuestion", "fieldValue"}
+_ANSWER_DISPOSITIONS = {"PROVIDED", "DONT_KNOW", "UNCLEAR"}
+
+_UNRESOLVED_ANSWER_TOP_LEVEL_KEYS = {"analysisMessage", "items", "unresolvedLine", "resolvedTargetOnly"}
+
 
 class SolarUnavailableError(Exception):
     """네트워크 실패·타임아웃·비2xx·JSON 계약 위반을 전부 이 예외 하나로 통일한다.
@@ -75,6 +112,7 @@ class SolarAnalysisItem:
     normalized_payload: dict
     missing_fields: list[str]
     pending_question: dict | None
+    target_kind: str | None = None  # "ENTITY"|"REQUEST_ITEM"|None — CHANGE_INPUT 모드에서만 값 있음
 
 
 @dataclass(frozen=True)
@@ -83,6 +121,15 @@ class UnresolvedLine:
     action: str
     entity_type: str
     message: str
+    target_kind: str = "ENTITY"  # CHANGE_INPUT 자체 unresolvedLine만 "REQUEST_ITEM"일 수 있음
+
+
+@dataclass(frozen=True)
+class ResolvedTargetOnly:
+    """UNRESOLVED_ANSWER 전용: 대상은 확정됐지만 무엇을 바꿀지는 이 답변만으로 알 수 없을 때."""
+
+    target_entity_id: str
+    target_kind: str  # "ENTITY"|"REQUEST_ITEM"
 
 
 @dataclass(frozen=True)
@@ -90,6 +137,15 @@ class SolarAnalysisResult:
     analysis_message: str
     items: list[SolarAnalysisItem]
     unresolved_line: UnresolvedLine | None
+    resolved_target_only: ResolvedTargetOnly | None = None  # UNRESOLVED_ANSWER 모드에서만 값 있음
+
+
+@dataclass(frozen=True)
+class SolarCardAnswerResult:
+    analysis_message: str
+    answer_disposition: str  # "PROVIDED" | "DONT_KNOW" | "UNCLEAR"
+    pending_question_message: str | None
+    field_value: dict | None
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +221,21 @@ def _resolve_optional_datetime(value: object) -> str | None:
         raise SolarUnavailableError(f"존재하지 않는 날짜·시각이다: {value!r}") from exc
     if parsed.tzinfo is None:
         raise SolarUnavailableError(f"timezone 없는(naive) 날짜는 허용하지 않는다: {value!r}")
+    return parsed.isoformat()
+
+
+def _require_rfc3339(value: object, context: str) -> str:
+    """hard-required RFC 3339 문자열(soft-missing 없음). 성공 시 canonical isoformat 문자열."""
+    if not isinstance(value, str) or not value.strip():
+        raise SolarUnavailableError(f"{context}가 비어있다.")
+    if not _RFC3339_PATTERN.match(value):
+        raise SolarUnavailableError(f"{context} 형식이 RFC 3339가 아니다: {value!r}")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise SolarUnavailableError(f"{context}에 존재하지 않는 날짜·시각이다: {value!r}") from exc
+    if parsed.tzinfo is None:
+        raise SolarUnavailableError(f"{context}에 timezone 없는(naive) 날짜는 허용하지 않는다: {value!r}")
     return parsed.isoformat()
 
 
@@ -437,10 +508,19 @@ def _validate_delete_payload(payload: dict, payload_keys: set[str], context: str
 # ---------------------------------------------------------------------------
 
 
-def _missing_order_for(entity_type: str, action: str) -> list[str]:
+def missing_order_for(entity_type: str, action: str) -> list[str]:
+    """entity_type/action별 canonical missing-field 순서. `solar_request_service.py`가 카드
+    답변·CHANGE_INPUT patch 후 다음 질문 필드를 고를 때 그대로 재사용한다(중복 정의 금지).
+
+    action="CREATE_MERGE"는 CHANGE_INPUT의 CREATE+REQUEST_ITEM patch 전용 pseudo-action이다
+    (title이 소프트해질 수 있어 plain CREATE와 순서가 다르다)."""
     if entity_type != "TASK":
         return _FIXED_SCHEDULE_MISSING_ORDER
-    return _TASK_MISSING_ORDER_UPDATE if action == "UPDATE" else _TASK_MISSING_ORDER_CREATE
+    if action == "UPDATE":
+        return _TASK_MISSING_ORDER_UPDATE
+    if action == "CREATE_MERGE":
+        return _TASK_MISSING_ORDER_CREATE_MERGE
+    return _TASK_MISSING_ORDER_CREATE  # CREATE(신규 카드만)
 
 
 def _parse_pending_question_cross_check(
@@ -461,7 +541,7 @@ def _parse_pending_question_cross_check(
     if not field or not message:
         raise SolarUnavailableError("pendingQuestion.field/message가 공백이다.")
 
-    order = _missing_order_for(entity_type, action)
+    order = missing_order_for(entity_type, action)
     expected = next((f for f in order if f in missing_fields), None)
     if field != expected:
         _log_contract_violation("PENDING_FIELD_MISMATCH", context=f"{entity_type}/{action}")
@@ -476,46 +556,116 @@ def _parse_item(
     raw: object,
     *,
     purpose: SolarRequestPurpose,
+    analysis_mode: str,
     candidate_task_ids: set[str],
     candidate_fixed_schedule_ids: set[str],
+    candidate_request_items: dict[str, dict] | None = None,
+    fixed_target_kind: str | None = None,
+    fixed_action: str | None = None,
+    fixed_entity_type: str | None = None,
+    fixed_target_entity_id: str | None = None,
 ) -> SolarAnalysisItem:
+    """analysis_mode에 따라 item 파싱 규칙이 달라진다.
+
+    - "INITIAL": 기존(#50) 동작 그대로.
+    - "CHANGE_INPUT": targetKind가 item 자체 키로 존재(SOLAR가 결정). CREATE+targetKind=
+      REQUEST_ITEM은 기존 대기 CREATE 카드 patch(changedFields 사용), DELETE+targetKind=
+      REQUEST_ITEM은 대기 카드 취소, UPDATE는 targetKind=ENTITY만 허용.
+    - "UNRESOLVED_ANSWER"(CHANGE_DETAILS 후속 포함): targetKind/action/entityType은 이 item
+      자체에 없고 호출자가 이미 확정해 fixed_* 파라미터로 고정한다.
+    """
+    candidate_request_items = candidate_request_items or {}
     if not isinstance(raw, dict):
         raise SolarUnavailableError("item이 dict가 아니다.")
 
     entity_type = raw.get("entityType")
     if entity_type not in ("TASK", "FIXED_SCHEDULE"):
         raise SolarUnavailableError(f"entityType 값이 올바르지 않다: {entity_type!r}")
+    if fixed_entity_type is not None and entity_type != fixed_entity_type:
+        raise SolarUnavailableError("entityType이 고정된 대상과 다르다.")
 
     action = raw.get("action")
     if action not in ("CREATE", "UPDATE", "DELETE"):
         raise SolarUnavailableError(f"action 값이 올바르지 않다: {action!r}")
+    if fixed_action is not None and action != fixed_action:
+        raise SolarUnavailableError("action이 고정된 값과 다르다.")
 
-    if purpose == SolarRequestPurpose.NEW_CYCLE and action != "CREATE":
+    if analysis_mode == "INITIAL" and purpose == SolarRequestPurpose.NEW_CYCLE and action != "CREATE":
         raise SolarUnavailableError("NEW_CYCLE에서는 action=CREATE만 허용한다.")
 
     is_task = entity_type == "TASK"
+    is_change_input = analysis_mode == "CHANGE_INPUT"
 
-    if action == "CREATE":
-        allowed_item_keys = _TASK_CREATE_ITEM_KEYS if is_task else _FS_CREATE_ITEM_KEYS
-    elif action == "UPDATE":
-        allowed_item_keys = _TASK_UPDATE_ITEM_KEYS if is_task else _FS_UPDATE_ITEM_KEYS
+    if is_change_input:
+        target_kind_raw = raw.get("targetKind")
     else:
-        allowed_item_keys = _TASK_DELETE_ITEM_KEYS if is_task else _FS_DELETE_ITEM_KEYS
+        target_kind_raw = fixed_target_kind  # UNRESOLVED_ANSWER: 호출자가 고정, INITIAL은 None
+
+    is_create_merge = action == "CREATE" and target_kind_raw == "REQUEST_ITEM"
+
+    if is_change_input:
+        if action == "CREATE":
+            if target_kind_raw not in (None, "REQUEST_ITEM"):
+                raise SolarUnavailableError(f"CREATE의 targetKind 값이 올바르지 않다: {target_kind_raw!r}")
+        elif action == "UPDATE":
+            if target_kind_raw != "ENTITY":
+                raise SolarUnavailableError(
+                    "UPDATE는 targetKind=ENTITY만 허용한다(REQUEST_ITEM 수정은 CREATE로 표현)."
+                )
+        else:  # DELETE
+            if target_kind_raw not in ("ENTITY", "REQUEST_ITEM"):
+                raise SolarUnavailableError(f"DELETE의 targetKind 값이 올바르지 않다: {target_kind_raw!r}")
+
+    if is_create_merge:
+        allowed_item_keys = (
+            _CHANGE_INPUT_TASK_CREATE_MERGE_ITEM_KEYS if is_task else _CHANGE_INPUT_FS_CREATE_MERGE_ITEM_KEYS
+        )
+    elif is_change_input:
+        if action == "CREATE":
+            allowed_item_keys = _CHANGE_INPUT_TASK_CREATE_ITEM_KEYS if is_task else _CHANGE_INPUT_FS_CREATE_ITEM_KEYS
+        elif action == "UPDATE":
+            allowed_item_keys = _CHANGE_INPUT_TASK_UPDATE_ITEM_KEYS if is_task else _CHANGE_INPUT_FS_UPDATE_ITEM_KEYS
+        else:
+            allowed_item_keys = _CHANGE_INPUT_TASK_DELETE_ITEM_KEYS if is_task else _CHANGE_INPUT_FS_DELETE_ITEM_KEYS
+    else:
+        if action == "CREATE":
+            allowed_item_keys = _TASK_CREATE_ITEM_KEYS if is_task else _FS_CREATE_ITEM_KEYS
+        elif action == "UPDATE":
+            allowed_item_keys = _TASK_UPDATE_ITEM_KEYS if is_task else _FS_UPDATE_ITEM_KEYS
+        else:
+            allowed_item_keys = _TASK_DELETE_ITEM_KEYS if is_task else _FS_DELETE_ITEM_KEYS
     _require_exact_keys(raw, allowed_item_keys, f"{entity_type} item({action})")
 
     raw_line_text = _require_non_blank_str(raw.get("rawLineText"), "item.rawLineText")
 
     target_entity_id = raw.get("targetEntityId")
-    if action == "CREATE":
+
+    if action == "CREATE" and not is_create_merge:
         if target_entity_id is not None:
             raise SolarUnavailableError("action=CREATE인데 targetEntityId가 있다.")
         target_entity_id = None
-    else:
+    elif is_create_merge:
+        if not isinstance(target_entity_id, str) or not target_entity_id.strip():
+            raise SolarUnavailableError("CREATE+REQUEST_ITEM인데 targetEntityId가 없다.")
+        candidate = candidate_request_items.get(target_entity_id)
+        if candidate is None or candidate.get("action") != "CREATE" or candidate.get("entityType") != entity_type:
+            # 존재하지 않거나, 읽기 시점 후보가 CREATE가 아니거나 entityType이 다르면 SOLAR가
+            # 잘못된 종류의 request item을 골랐다는 뜻 — 계약 위반(repair 대상), 409가 아니다.
+            raise SolarUnavailableError("CREATE+REQUEST_ITEM 대상이 유효한 CREATE 후보가 아니다.")
+    else:  # UPDATE(항상 ENTITY) 또는 DELETE(ENTITY|REQUEST_ITEM)
         if not isinstance(target_entity_id, str) or not target_entity_id.strip():
             raise SolarUnavailableError("UPDATE/DELETE인데 targetEntityId가 없다.")
-        candidates = candidate_task_ids if is_task else candidate_fixed_schedule_ids
-        if target_entity_id not in candidates:
-            raise SolarUnavailableError("targetEntityId가 후보 목록에 없다(할루시네이션).")
+        if target_kind_raw == "REQUEST_ITEM":
+            candidate = candidate_request_items.get(target_entity_id)
+            if candidate is None or candidate.get("entityType") != entity_type:
+                raise SolarUnavailableError("REQUEST_ITEM 대상이 유효한 후보가 아니다.")
+        else:
+            candidates = candidate_task_ids if is_task else candidate_fixed_schedule_ids
+            if target_entity_id not in candidates:
+                raise SolarUnavailableError("targetEntityId가 후보 목록에 없다(할루시네이션).")
+
+    if fixed_target_entity_id is not None and target_entity_id != fixed_target_entity_id:
+        raise SolarUnavailableError("targetEntityId가 고정된 대상과 다르다.")
 
     normalized_payload_raw = raw.get("normalizedPayload")
     if not isinstance(normalized_payload_raw, dict):
@@ -525,7 +675,7 @@ def _parse_item(
     if pending_question_raw is not None and not isinstance(pending_question_raw, dict):
         raise SolarUnavailableError("pendingQuestion이 dict가 아니다.")
 
-    if action == "CREATE":
+    if action == "CREATE" and not is_create_merge:
         update_fields: list[str] = []
         if is_task:
             missing_fields, canonical_payload = _validate_and_normalize_task_create(
@@ -535,6 +685,29 @@ def _parse_item(
             missing_fields, canonical_payload = _validate_and_normalize_fixed_schedule_create(
                 normalized_payload_raw
             )
+        cross_check_action = "CREATE"
+    elif is_create_merge:
+        raw_changed_fields = raw.get("changedFields")
+        allowed_field_names = _TASK_CREATE_MERGE_FIELD_NAMES if is_task else _FIXED_SCHEDULE_UPDATE_FIELD_NAMES
+        if not isinstance(raw_changed_fields, list) or not raw_changed_fields:
+            raise SolarUnavailableError("changedFields가 비어있거나 리스트가 아니다.")
+        update_fields = []
+        for field_name in raw_changed_fields:
+            if not isinstance(field_name, str) or field_name not in allowed_field_names:
+                _log_contract_violation("INVALID_UPDATE_FIELD_NAME", context=f"{entity_type}/CREATE_MERGE")
+                raise SolarUnavailableError(
+                    f"changedFields에 알 수 없는 필드가 있다: {field_name!r}", code="INVALID_UPDATE_FIELD_NAME"
+                )
+            update_fields.append(field_name)
+        if is_task:
+            missing_fields, canonical_payload = _validate_and_normalize_task_update(
+                normalized_payload_raw, update_fields, raw.get("deadlineState")
+            )
+        else:
+            missing_fields, canonical_payload = _validate_and_normalize_fixed_schedule_update(
+                normalized_payload_raw, update_fields
+            )
+        cross_check_action = "CREATE_MERGE"
     elif action == "UPDATE":
         raw_update_fields = raw.get("updateFields")
         allowed_field_names = _TASK_UPDATE_FIELD_NAMES if is_task else _FIXED_SCHEDULE_UPDATE_FIELD_NAMES
@@ -558,6 +731,7 @@ def _parse_item(
             missing_fields, canonical_payload = _validate_and_normalize_fixed_schedule_update(
                 normalized_payload_raw, update_fields
             )
+        cross_check_action = "UPDATE"
     else:  # DELETE
         update_fields = []
         payload_keys = _TASK_PAYLOAD_KEYS if is_task else _FS_PAYLOAD_KEYS
@@ -565,10 +739,13 @@ def _parse_item(
             normalized_payload_raw, payload_keys, f"{entity_type} normalizedPayload"
         )
         missing_fields = []
+        cross_check_action = "DELETE"
 
     pending_question = _parse_pending_question_cross_check(
-        pending_question_raw, missing_fields, entity_type, action
+        pending_question_raw, missing_fields, entity_type, cross_check_action
     )
+
+    resolved_target_kind = target_kind_raw if is_change_input else None
 
     return SolarAnalysisItem(
         entity_type=entity_type,
@@ -579,13 +756,25 @@ def _parse_item(
         normalized_payload=canonical_payload,
         missing_fields=missing_fields,
         pending_question=pending_question,
+        target_kind=resolved_target_kind,
     )
 
 
 def _parse_unresolved_line(
-    raw: dict, *, candidate_task_ids: set[str], candidate_fixed_schedule_ids: set[str]
+    raw: dict,
+    *,
+    analysis_mode: str,
+    candidate_task_ids: set[str],
+    candidate_fixed_schedule_ids: set[str],
+    candidate_request_items: dict[str, dict] | None = None,
+    fixed_target_kind: str | None = None,
 ) -> UnresolvedLine:
-    _require_exact_keys(raw, _UNRESOLVED_LINE_KEYS, "unresolvedLine")
+    """CHANGE_INPUT은 targetKind를 JSON 키로 받는다(SOLAR가 결정). 그 외 모드(UNRESOLVED_ANSWER
+    포함)는 호출자가 fixed_target_kind로 이미 고정한 값을 쓴다(없으면 항상 ENTITY)."""
+    candidate_request_items = candidate_request_items or {}
+    is_change_input = analysis_mode == "CHANGE_INPUT"
+    allowed_keys = _CHANGE_INPUT_UNRESOLVED_LINE_KEYS if is_change_input else _UNRESOLVED_LINE_KEYS
+    _require_exact_keys(raw, allowed_keys, "unresolvedLine")
 
     raw_line_text = _require_non_blank_str(raw.get("rawLineText"), "unresolvedLine.rawLineText")
 
@@ -599,11 +788,33 @@ def _parse_unresolved_line(
 
     message = _require_non_blank_str(raw.get("message"), "unresolvedLine.message")
 
-    candidates = candidate_task_ids if entity_type == "TASK" else candidate_fixed_schedule_ids
-    if not candidates:
-        raise SolarUnavailableError("unresolvedLine의 entityType에 해당하는 후보가 0개다.")
+    if is_change_input:
+        target_kind = raw.get("targetKind")
+        if target_kind not in ("ENTITY", "REQUEST_ITEM"):
+            raise SolarUnavailableError(f"unresolvedLine.targetKind 값이 올바르지 않다: {target_kind!r}")
+        if action == "UPDATE" and target_kind != "ENTITY":
+            raise SolarUnavailableError("unresolvedLine의 UPDATE는 targetKind=ENTITY만 허용한다.")
+    else:
+        target_kind = fixed_target_kind or "ENTITY"
 
-    return UnresolvedLine(raw_line_text=raw_line_text, action=action, entity_type=entity_type, message=message)
+    if target_kind == "REQUEST_ITEM":
+        matching = [
+            item_id for item_id, info in candidate_request_items.items() if info.get("entityType") == entity_type
+        ]
+        if not matching:
+            raise SolarUnavailableError("unresolvedLine의 entityType에 해당하는 REQUEST_ITEM 후보가 0개다.")
+    else:
+        candidates = candidate_task_ids if entity_type == "TASK" else candidate_fixed_schedule_ids
+        if not candidates:
+            raise SolarUnavailableError("unresolvedLine의 entityType에 해당하는 후보가 0개다.")
+
+    return UnresolvedLine(
+        raw_line_text=raw_line_text,
+        action=action,
+        entity_type=entity_type,
+        message=message,
+        target_kind=target_kind,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -617,8 +828,26 @@ def parse_solar_response(
     purpose: SolarRequestPurpose,
     candidate_task_ids: set[str],
     candidate_fixed_schedule_ids: set[str],
+    analysis_mode: str = "INITIAL",
+    candidate_request_items: dict[str, dict] | None = None,
+    expected_action: str | None = None,
+    expected_entity_type: str | None = None,
+    expected_target_kind: str | None = None,
+    lock_target_entity_id: str | None = None,
 ) -> SolarAnalysisResult:
-    """SOLAR 응답 content(JSON 문자열)를 파싱·검증하는 순수 함수(DB 접근 없음, back-fill 없음)."""
+    """SOLAR 응답 content(JSON 문자열)를 파싱·검증하는 순수 함수(DB 접근 없음, back-fill 없음).
+
+    analysis_mode:
+    - "INITIAL": 기존(#50) 동작 그대로.
+    - "CHANGE_INPUT": items/unresolvedLine에 targetKind 확장(SOLAR가 item마다 결정),
+      CREATE+targetKind=REQUEST_ITEM은 changedFields 병용, 한 응답 안 동일 대상 중복 조작 거부.
+    - "UNRESOLVED_ANSWER"(CHANGE_DETAILS 후속 포함): items(최대 1개)/unresolvedLine/
+      resolvedTargetOnly 중 정확히 하나만 허용(3-way XOR). expected_action/expected_entity_type/
+      expected_target_kind로 그 item(또는 unresolvedLine)의 action/entityType/targetKind를
+      호출자가 고정한다. lock_target_entity_id가 있으면(CHANGE_DETAILS 후속) unresolvedLine
+      자체를 금지하고 대상을 그 id 하나로 고정한다.
+    """
+    candidate_request_items = candidate_request_items or {}
     try:
         raw = json.loads(content)
     except (json.JSONDecodeError, TypeError) as exc:
@@ -627,7 +856,9 @@ def parse_solar_response(
     if not isinstance(raw, dict):
         raise SolarUnavailableError("SOLAR 응답 최상위가 dict가 아니다.")
 
-    _require_exact_keys(raw, _TOP_LEVEL_KEYS, "최상위")
+    is_unresolved_answer = analysis_mode == "UNRESOLVED_ANSWER"
+    top_level_keys = _UNRESOLVED_ANSWER_TOP_LEVEL_KEYS if is_unresolved_answer else _TOP_LEVEL_KEYS
+    _require_exact_keys(raw, top_level_keys, "최상위")
 
     analysis_message_raw = raw.get("analysisMessage")
     if not isinstance(analysis_message_raw, str) or not analysis_message_raw.strip():
@@ -642,31 +873,226 @@ def parse_solar_response(
     if raw_unresolved is not None and not isinstance(raw_unresolved, dict):
         raise SolarUnavailableError("unresolvedLine이 null 또는 dict가 아니다.")
 
-    if not raw_items and raw_unresolved is None:
-        raise SolarUnavailableError("items와 unresolvedLine이 모두 비어있다.")
+    raw_resolved_target_only = None
+    if is_unresolved_answer:
+        raw_resolved_target_only = raw.get("resolvedTargetOnly")
+        if raw_resolved_target_only is not None and not isinstance(raw_resolved_target_only, dict):
+            raise SolarUnavailableError("resolvedTargetOnly가 null 또는 dict가 아니다.")
 
-    if purpose == SolarRequestPurpose.NEW_CYCLE and raw_unresolved is not None:
+        outcomes = [bool(raw_items), raw_unresolved is not None, raw_resolved_target_only is not None]
+        if sum(outcomes) != 1:
+            raise SolarUnavailableError("items/unresolvedLine/resolvedTargetOnly 중 정확히 하나만 있어야 한다.")
+        if lock_target_entity_id is not None and raw_unresolved is not None:
+            raise SolarUnavailableError("CHANGE_DETAILS 후속 응답에는 unresolvedLine이 있으면 안 된다.")
+        if len(raw_items) > 1:
+            raise SolarUnavailableError("UNRESOLVED_ANSWER 응답의 items는 최대 1개여야 한다.")
+    else:
+        if not raw_items and raw_unresolved is None:
+            raise SolarUnavailableError("items와 unresolvedLine이 모두 비어있다.")
+
+    if analysis_mode == "INITIAL" and purpose == SolarRequestPurpose.NEW_CYCLE and raw_unresolved is not None:
         raise SolarUnavailableError("NEW_CYCLE에서는 unresolvedLine이 있으면 안 된다.")
 
     unresolved_line = None
     if raw_unresolved is not None:
         unresolved_line = _parse_unresolved_line(
             raw_unresolved,
+            analysis_mode=analysis_mode,
             candidate_task_ids=candidate_task_ids,
             candidate_fixed_schedule_ids=candidate_fixed_schedule_ids,
+            candidate_request_items=candidate_request_items,
+            fixed_target_kind=expected_target_kind,
         )
+        if is_unresolved_answer:
+            if expected_action is not None and unresolved_line.action != expected_action:
+                raise SolarUnavailableError("unresolvedLine.action이 기대한 값과 다르다.")
+            if expected_entity_type is not None and unresolved_line.entity_type != expected_entity_type:
+                raise SolarUnavailableError("unresolvedLine.entityType이 기대한 값과 다르다.")
+
+    resolved_target_only = None
+    if raw_resolved_target_only is not None:
+        _require_exact_keys(raw_resolved_target_only, {"targetEntityId", "targetKind"}, "resolvedTargetOnly")
+        rt_target_entity_id = raw_resolved_target_only.get("targetEntityId")
+        rt_target_kind = raw_resolved_target_only.get("targetKind")
+        if rt_target_kind not in ("ENTITY", "REQUEST_ITEM"):
+            raise SolarUnavailableError(f"resolvedTargetOnly.targetKind 값이 올바르지 않다: {rt_target_kind!r}")
+        if not isinstance(rt_target_entity_id, str) or not rt_target_entity_id.strip():
+            raise SolarUnavailableError("resolvedTargetOnly.targetEntityId가 없다.")
+        if rt_target_kind == "REQUEST_ITEM":
+            candidate = candidate_request_items.get(rt_target_entity_id)
+            if candidate is None or candidate.get("entityType") != expected_entity_type:
+                raise SolarUnavailableError("resolvedTargetOnly 대상이 유효한 REQUEST_ITEM 후보가 아니다.")
+        else:
+            candidates = candidate_task_ids if expected_entity_type == "TASK" else candidate_fixed_schedule_ids
+            if rt_target_entity_id not in candidates:
+                raise SolarUnavailableError("resolvedTargetOnly.targetEntityId가 후보 목록에 없다.")
+        if lock_target_entity_id is not None and rt_target_entity_id != lock_target_entity_id:
+            raise SolarUnavailableError("resolvedTargetOnly의 대상이 고정된 대상과 다르다.")
+        resolved_target_only = ResolvedTargetOnly(target_entity_id=rt_target_entity_id, target_kind=rt_target_kind)
 
     items = [
         _parse_item(
             raw_item,
             purpose=purpose,
+            analysis_mode=analysis_mode,
             candidate_task_ids=candidate_task_ids,
             candidate_fixed_schedule_ids=candidate_fixed_schedule_ids,
+            candidate_request_items=candidate_request_items,
+            fixed_target_kind=expected_target_kind if is_unresolved_answer else None,
+            fixed_action=expected_action if is_unresolved_answer else None,
+            fixed_entity_type=expected_entity_type if is_unresolved_answer else None,
+            fixed_target_entity_id=lock_target_entity_id,
         )
         for raw_item in raw_items
     ]
 
-    return SolarAnalysisResult(analysis_message=analysis_message, items=items, unresolved_line=unresolved_line)
+    if analysis_mode == "CHANGE_INPUT":
+        seen_targets: set[tuple] = set()
+        for item in items:
+            if item.target_entity_id is not None:
+                key = (item.target_kind, item.entity_type, item.target_entity_id)
+                if key in seen_targets:
+                    raise SolarUnavailableError("CHANGE_INPUT 응답이 같은 대상을 여러 item에서 동시에 조작한다.")
+                seen_targets.add(key)
+
+    return SolarAnalysisResult(
+        analysis_message=analysis_message,
+        items=items,
+        unresolved_line=unresolved_line,
+        resolved_target_only=resolved_target_only,
+    )
+
+
+def parse_card_answer_response(
+    content: str, *, entity_type: str, action: str, field: str, attempt_number: int
+) -> SolarCardAnswerResult:
+    """CARD_ANSWER 전용 좁은 계약 파서. items[]/unresolvedLine 재사용 없이 이 카드·이 필드 하나만
+    다룬다. answerDisposition은 SOLAR의 자기 보고 값을 그대로 신뢰하고, 서비스는 attemptCount
+    증가 여부만 이 값으로 분기한다(필드가 missing에 남아있는지로 추론하지 않는다)."""
+    try:
+        raw = json.loads(content)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise SolarUnavailableError("SOLAR 응답이 유효한 JSON이 아니다.") from exc
+
+    if not isinstance(raw, dict):
+        raise SolarUnavailableError("SOLAR 응답 최상위가 dict가 아니다.")
+
+    _require_exact_keys(raw, _CARD_ANSWER_TOP_LEVEL_KEYS, "최상위")
+
+    analysis_message_raw = raw.get("analysisMessage")
+    if not isinstance(analysis_message_raw, str) or not analysis_message_raw.strip():
+        raise SolarUnavailableError("analysisMessage가 비어있다.")
+    analysis_message = analysis_message_raw.strip()
+
+    answer_disposition = raw.get("answerDisposition")
+    if answer_disposition not in _ANSWER_DISPOSITIONS:
+        raise SolarUnavailableError(f"answerDisposition 값이 올바르지 않다: {answer_disposition!r}")
+
+    if answer_disposition == "AI_ESTIMATED":  # 방어적 — 값 집합에 원래 없지만 유사 오타 방지
+        raise SolarUnavailableError("answerDisposition에 잘못된 값이 왔다.")
+
+    pending_question_message_raw = raw.get("pendingQuestion")
+    if pending_question_message_raw is not None and not isinstance(pending_question_message_raw, str):
+        raise SolarUnavailableError("pendingQuestion이 문자열 또는 null이 아니다.")
+    pending_question_message = (
+        pending_question_message_raw.strip() if isinstance(pending_question_message_raw, str) else None
+    )
+    if pending_question_message == "":
+        pending_question_message = None
+
+    field_value_raw = raw.get("fieldValue")
+    if field_value_raw is not None and not isinstance(field_value_raw, dict):
+        raise SolarUnavailableError("fieldValue가 dict 또는 null이 아니다.")
+
+    field_value: dict | None = None
+    if answer_disposition == "PROVIDED":
+        if not isinstance(field_value_raw, dict):
+            raise SolarUnavailableError("answerDisposition=PROVIDED인데 fieldValue가 없다.")
+        field_value = _validate_card_answer_field_value(
+            field_value_raw, entity_type=entity_type, action=action, field=field, attempt_number=attempt_number
+        )
+        if pending_question_message is not None:
+            raise SolarUnavailableError("answerDisposition=PROVIDED인데 pendingQuestion이 있다.")
+    else:  # DONT_KNOW | UNCLEAR
+        if field_value_raw is not None:
+            raise SolarUnavailableError("answerDisposition이 PROVIDED가 아닌데 fieldValue가 있다.")
+        if not pending_question_message:
+            raise SolarUnavailableError("answerDisposition이 PROVIDED가 아니면 pendingQuestion이 필요하다.")
+
+    return SolarCardAnswerResult(
+        analysis_message=analysis_message,
+        answer_disposition=answer_disposition,
+        pending_question_message=pending_question_message,
+        field_value=field_value,
+    )
+
+
+def _validate_card_answer_field_value(
+    raw: dict, *, entity_type: str, action: str, field: str, attempt_number: int
+) -> dict:
+    """CARD_ANSWER의 fieldValue는 그 필드 하나만 담는 좁은 dict. 기존 create/update validator를
+    필드 단위로 재사용하지 않고(그것들은 카드 전체 payload를 기대) 여기서 직접 검증한다 —
+    필드별 형태가 단순해 별도 좁은 계약을 유지하는 편이 기존 코드를 왜곡하지 않는다."""
+    if field == "title":
+        _require_exact_keys(raw, {"title"}, "fieldValue(title)")
+        title = raw.get("title")
+        if not isinstance(title, str) or not title.strip():
+            raise SolarUnavailableError("fieldValue.title이 비어있다.")
+        return {"title": title.strip()}
+
+    if field == "deadlineAt":
+        _require_exact_keys(raw, {"deadlineState", "deadlineAt"}, "fieldValue(deadlineAt)")
+        deadline_state = raw.get("deadlineState")
+        if deadline_state not in ("KNOWN", "NONE"):
+            raise SolarUnavailableError(f"fieldValue.deadlineState 값이 올바르지 않다: {deadline_state!r}")
+        deadline_at = raw.get("deadlineAt")
+        if deadline_state == "KNOWN":
+            deadline_at = _require_rfc3339(deadline_at, "fieldValue.deadlineAt")
+        else:
+            if deadline_at is not None:
+                raise SolarUnavailableError("deadlineState=NONE인데 deadlineAt이 null이 아니다.")
+        return {"deadlineState": deadline_state, "deadlineAt": deadline_at}
+
+    if field in ("estimatedMinutes", "remainingMinutes"):
+        keys = {field, "estimatedMinutesSource"} if field == "estimatedMinutes" else {field}
+        _require_exact_keys(raw, keys, f"fieldValue({field})")
+        value = raw.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise SolarUnavailableError(f"fieldValue.{field}가 0 이상의 정수가 아니다.")
+        result = {field: value}
+        if field == "estimatedMinutes":
+            source = raw.get("estimatedMinutesSource")
+            if source not in ("USER", "AI_ESTIMATED"):
+                raise SolarUnavailableError(f"fieldValue.estimatedMinutesSource 값이 올바르지 않다: {source!r}")
+            if attempt_number == 1 and source == "AI_ESTIMATED":
+                raise SolarUnavailableError("1차 답변에서는 estimatedMinutesSource=AI_ESTIMATED일 수 없다.")
+            result["estimatedMinutesSource"] = source
+        return result
+
+    if field == "amount":
+        _require_exact_keys(raw, {"amountText", "amountSource"}, "fieldValue(amount)")
+        amount_source = raw.get("amountSource")
+        if amount_source not in ("USER", "AI_ESTIMATED", "UNKNOWN"):
+            raise SolarUnavailableError(f"fieldValue.amountSource 값이 올바르지 않다: {amount_source!r}")
+        amount_text = raw.get("amountText")
+        if amount_source == "UNKNOWN":
+            if amount_text is not None:
+                raise SolarUnavailableError("amountSource=UNKNOWN인데 amountText가 null이 아니다.")
+        else:
+            if not isinstance(amount_text, str) or not amount_text.strip():
+                raise SolarUnavailableError("amountSource가 USER/AI_ESTIMATED인데 amountText가 없다.")
+            amount_text = amount_text.strip()
+        return {"amountText": amount_text, "amountSource": amount_source}
+
+    if field in ("startAt", "endAt"):
+        # startAt/endAt은 missing_order상 독립 필드로 하나씩 질문·답변된다. 둘 사이의
+        # endAt>startAt 교차검증은 두 값이 모두 확정된 카드 전체 payload merge 시점(서비스
+        # 계층)에서 하며, 이 좁은 fieldValue 단계에서는 하지 않는다.
+        _require_exact_keys(raw, {field}, f"fieldValue({field})")
+        value = _require_rfc3339(raw.get(field), f"fieldValue.{field}")
+        return {field: value}
+
+    raise SolarUnavailableError(f"알 수 없는 field: {field!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -963,6 +1389,27 @@ def _build_repair_messages(
     ]
 
 
+def _call_and_parse_with_repair(messages: list[dict], parse_fn: Callable[[str], _T]) -> _T:
+    """`call_solar` → canonicalize → `parse_fn` → (계약 위반 시) 최대 1회 repair → canonicalize →
+    `parse_fn` 순서를 모든 analyze_* 진입점이 공유하는 helper. `call_solar`는 이 함수 안에서
+    최대 2회(원본 1회 + repair 1회)만 호출된다. timeout·HTTP 오류 등 전송 계층 오류는
+    `call_solar`에서 즉시 전파되며 repair 대상이 아니다. repair 응답도 반드시 같은
+    canonicalize + `parse_fn`을 다시 통과해야 하며, 그래도 실패하면 예외가 그대로 전파돼(저장
+    없이) 호출자가 503으로 매핑한다."""
+    content = call_solar({"messages": messages})
+    canonical_content = _canonicalize_response_content(content)
+    try:
+        return parse_fn(canonical_content)
+    except SolarUnavailableError as first_violation:
+        violation_code = first_violation.code
+
+    logger.warning("SOLAR_REPAIR_ATTEMPT code=%s", violation_code)
+    repair_messages = _build_repair_messages(messages, content, violation_code)
+    repair_content = call_solar({"messages": repair_messages})
+    canonical_repair_content = _canonicalize_response_content(repair_content)
+    return parse_fn(canonical_repair_content)
+
+
 def analyze_message(
     message: str,
     *,
@@ -973,16 +1420,9 @@ def analyze_message(
     candidate_tasks: list[dict] | None = None,
     candidate_fixed_schedules: list[dict] | None = None,
 ) -> SolarAnalysisResult:
-    """`call_solar` → canonicalize → `parse_solar_response` 순서로 호출하는 단일 진입점(전부
-    동기). 서비스 계층은 이 함수 하나만 호출·mock한다.
-
-    계약 위반(파싱·검증 실패)이면 원본 응답·위반 코드·기존 대화를 그대로 활용해 SOLAR에
-    JSON 교정을 한 번만 요청한다(repair). timeout·HTTP 오류·연결 실패 등 전송 계층 오류는
-    `call_solar`에서 즉시 전파되며 이 repair 대상이 아니다(첫 호출·repair 호출 모두 동일).
-    `call_solar`는 이 함수 안에서 최대 2회(원본 1회 + repair 1회)만 호출된다. repair 응답도
-    반드시 같은 canonicalize + strict parser를 다시 통과해야 하며, 그래도 실패하면 예외가
-    그대로 전파돼(저장 없이) 호출자가 503으로 매핑한다.
-    """
+    """`call_solar` → canonicalize → `parse_solar_response` 순서로 호출하는 INITIAL 분석 진입점
+    (전부 동기). 서비스 계층은 이 함수 하나만 호출·mock한다. repair 규칙은
+    `_call_and_parse_with_repair` 참고."""
     candidate_tasks = candidate_tasks or []
     candidate_fixed_schedules = candidate_fixed_schedules or []
 
@@ -998,25 +1438,326 @@ def analyze_message(
     candidate_task_ids = {str(candidate["id"]) for candidate in candidate_tasks}
     candidate_fixed_schedule_ids = {str(candidate["id"]) for candidate in candidate_fixed_schedules}
 
-    content = call_solar({"messages": messages})
-    canonical_content = _canonicalize_response_content(content)
-    try:
+    def _parse(content: str) -> SolarAnalysisResult:
         return parse_solar_response(
-            canonical_content,
+            content,
             purpose=purpose,
             candidate_task_ids=candidate_task_ids,
             candidate_fixed_schedule_ids=candidate_fixed_schedule_ids,
         )
-    except SolarUnavailableError as first_violation:
-        violation_code = first_violation.code
 
-    logger.warning("SOLAR_REPAIR_ATTEMPT code=%s", violation_code)
-    repair_messages = _build_repair_messages(messages, content, violation_code)
-    repair_content = call_solar({"messages": repair_messages})
-    canonical_repair_content = _canonicalize_response_content(repair_content)
-    return parse_solar_response(
-        canonical_repair_content,
-        purpose=purpose,
-        candidate_task_ids=candidate_task_ids,
-        candidate_fixed_schedule_ids=candidate_fixed_schedule_ids,
+    return _call_and_parse_with_repair(messages, _parse)
+
+
+def _build_card_answer_prompt_messages(
+    message: str,
+    *,
+    now: datetime,
+    entity_type: str,
+    action: str,
+    field: str,
+    question_message: str,
+    attempt_number: int,
+    card_context: dict,
+) -> list[dict]:
+    context = {
+        "now": now.astimezone(_SEOUL_TZ).isoformat(),
+        "entityType": entity_type,
+        "action": action,
+        "field": field,
+        "questionAsked": question_message,
+        "attemptNumber": attempt_number,
+        "cardContext": card_context,
+    }
+    system_prompt = (
+        "당신은 '이음' 서비스에서 하나의 카드의 특정 필드 하나에 대한 사용자의 답변을 해석하는"
+        " 분석기입니다. 반드시 아래 JSON 스키마 하나로만 응답하고 다른 설명·마크다운·코드블록을"
+        " 절대 덧붙이지 마세요.\n\n"
+        "최상위 키는 정확히 analysisMessage, answerDisposition, pendingQuestion, fieldValue"
+        " 네 개만 포함해야 합니다.\n"
+        "- analysisMessage: 사용자에게 보여줄 한국어 안내 문장(공백 아님).\n"
+        "- answerDisposition: \"PROVIDED\"(값을 확정할 수 있음) | \"DONT_KNOW\"(사용자가 모른다고"
+        " 답하거나 AI가 대신 추정해야 함) | \"UNCLEAR\"(답변이 이 질문과 무관하거나 이해할 수"
+        " 없음) 중 하나입니다.\n"
+        "- answerDisposition=\"PROVIDED\"면 fieldValue를 반드시 채우고 pendingQuestion은 반드시"
+        " null입니다.\n"
+        "- answerDisposition이 \"DONT_KNOW\"/\"UNCLEAR\"면 fieldValue는 반드시 null이고"
+        " pendingQuestion에 다시 물어볼 한국어 질문 문장을 채웁니다(빈 문자열 금지).\n\n"
+        f"[이 카드/필드 컨텍스트]\n{json.dumps(context, ensure_ascii=False)}\n\n"
+        "[field별 fieldValue 형태 — answerDisposition=\"PROVIDED\"일 때만]\n"
+        "- title: {\"title\": \"<문자열>\"}\n"
+        "- deadlineAt: {\"deadlineState\": \"KNOWN\"|\"NONE\", \"deadlineAt\": deadlineState="
+        "\"KNOWN\"이면 timezone 포함 RFC 3339 문자열, \"NONE\"이면 null}\n"
+        "- estimatedMinutes: {\"estimatedMinutes\": 0 이상 정수, \"estimatedMinutesSource\":"
+        " \"USER\"|\"AI_ESTIMATED\"}."
+        + (
+            " attemptNumber=1이므로 estimatedMinutesSource는 반드시 \"USER\"여야 합니다(1차 답변은"
+            " AI 추정일 수 없음)."
+            if attempt_number == 1
+            else ""
+        )
+        + "\n"
+        "- remainingMinutes: {\"remainingMinutes\": 0 이상 정수}\n"
+        "- amount: {\"amountText\": \"<문자열>\"(amountSource=\"UNKNOWN\"이면 null),"
+        " \"amountSource\": \"USER\"|\"AI_ESTIMATED\"|\"UNKNOWN\"}\n"
+        "- startAt: {\"startAt\": RFC3339 문자열}, endAt: {\"endAt\": RFC3339 문자열}(그 필드"
+        " 하나만, 서로 섞지 마세요)\n\n"
+        "사용자의 답변이 질문과 전혀 무관하거나 새로운 다른 요청으로 보이면"
+        " answerDisposition=\"UNCLEAR\"로 응답하고 pendingQuestion에 원래 질문을 다시 안내하세요."
+        " 값을 모른다고 답하면 answerDisposition=\"DONT_KNOW\"로 응답하세요."
     )
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": message},
+    ]
+
+
+def analyze_card_answer(
+    message: str,
+    *,
+    now: datetime,
+    entity_type: str,
+    action: str,
+    field: str,
+    question_message: str,
+    attempt_number: int,
+    card_context: dict | None = None,
+) -> SolarCardAnswerResult:
+    """CARD_ANSWER 전용 진입점 — items[]/unresolvedLine을 재사용하지 않는 좁은 계약."""
+    card_context = card_context or {}
+    messages = _build_card_answer_prompt_messages(
+        message,
+        now=now,
+        entity_type=entity_type,
+        action=action,
+        field=field,
+        question_message=question_message,
+        attempt_number=attempt_number,
+        card_context=card_context,
+    )
+
+    def _parse(content: str) -> SolarCardAnswerResult:
+        return parse_card_answer_response(
+            content, entity_type=entity_type, action=action, field=field, attempt_number=attempt_number
+        )
+
+    return _call_and_parse_with_repair(messages, _parse)
+
+
+def _build_unresolved_answer_prompt_messages(
+    message: str,
+    *,
+    now: datetime,
+    expected_action: str,
+    expected_entity_type: str,
+    expected_target_kind: str,
+    original_raw_line_text: str,
+    candidates: list[dict],
+) -> list[dict]:
+    context = {
+        "now": now.astimezone(_SEOUL_TZ).isoformat(),
+        "expectedAction": expected_action,
+        "expectedEntityType": expected_entity_type,
+        "expectedTargetKind": expected_target_kind,
+        "originalReference": original_raw_line_text,
+        "candidates": candidates,
+    }
+    system_prompt = (
+        "당신은 '이음' 서비스에서 이전에 대상을 하나로 특정하지 못했던 참조에 대한 사용자의"
+        " 후속 답변을 해석하는 분석기입니다. 반드시 아래 JSON 스키마 하나로만 응답하세요.\n\n"
+        "최상위 키는 정확히 analysisMessage, items, unresolvedLine, resolvedTargetOnly 네 개만"
+        " 포함합니다. items(원소 정확히 1개인 배열)/unresolvedLine/resolvedTargetOnly 중"
+        " 정확히 하나만 값이 있고, 값이 없는 나머지는 각각 빈 배열([])/null/null이어야 합니다.\n"
+        "- items에 1개를 채우는 경우: 대상이 확정됐고 무엇을 어떻게 바꿀지(또는 삭제할지)까지"
+        " 이번 답변에서 알 수 있을 때만입니다. entityType은 반드시"
+        f" \"{expected_entity_type}\", action은 반드시 \"{expected_action}\"이어야 합니다."
+        " targetEntityId는 candidates 중 하나의 id와 정확히 같아야 합니다. 그 외 필드는 기존"
+        " CREATE/UPDATE/DELETE item 규칙을 그대로 따릅니다(updateFields/normalizedPayload/"
+        " deadlineState/pendingQuestion 등).\n"
+        "- resolvedTargetOnly를 채우는 경우: 어떤 대상을 가리키는지는 이번 답변으로 확정됐지만"
+        " 무엇을 바꿀지는 이 답변만으로는 아직 알 수 없을 때입니다. 정확히"
+        " {\"targetEntityId\": \"<candidates 중 하나의 id>\", \"targetKind\":"
+        f" \"{expected_target_kind}\"}}만 채우세요.\n"
+        "- unresolvedLine을 채우는 경우: 이 답변으로도 여전히 어떤 대상인지 하나로 특정할 수"
+        " 없을 때입니다. entityType/action은 위와 동일하게 고정하고 message에 다시 확인할"
+        " 한국어 질문을 채우세요.\n\n"
+        f"[컨텍스트]\n{json.dumps(context, ensure_ascii=False)}"
+    )
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": message},
+    ]
+
+
+def analyze_unresolved_answer(
+    message: str,
+    *,
+    now: datetime,
+    purpose: SolarRequestPurpose,
+    expected_action: str,
+    expected_entity_type: str,
+    expected_target_kind: str,
+    original_raw_line_text: str,
+    candidate_tasks: list[dict] | None = None,
+    candidate_fixed_schedules: list[dict] | None = None,
+    candidate_request_items: dict[str, dict] | None = None,
+    lock_target_entity_id: str | None = None,
+) -> SolarAnalysisResult:
+    """UNRESOLVED_ANSWER 전용 진입점. `candidate_request_items`의 값 dict는 최소한
+    entityType/action 키를 포함해야 한다(파서 검증용). `lock_target_entity_id`가 있으면
+    CHANGE_DETAILS 후속 답변 — 대상 하나로 고정하고 unresolvedLine을 금지한다."""
+    candidate_tasks = candidate_tasks or []
+    candidate_fixed_schedules = candidate_fixed_schedules or []
+    candidate_request_items = candidate_request_items or {}
+
+    if expected_target_kind == "REQUEST_ITEM":
+        prompt_candidates = [{"id": item_id, **info} for item_id, info in candidate_request_items.items()]
+    else:
+        prompt_candidates = candidate_tasks if expected_entity_type == "TASK" else candidate_fixed_schedules
+
+    messages = _build_unresolved_answer_prompt_messages(
+        message,
+        now=now,
+        expected_action=expected_action,
+        expected_entity_type=expected_entity_type,
+        expected_target_kind=expected_target_kind,
+        original_raw_line_text=original_raw_line_text,
+        candidates=prompt_candidates,
+    )
+    candidate_task_ids = {str(c["id"]) for c in candidate_tasks}
+    candidate_fixed_schedule_ids = {str(c["id"]) for c in candidate_fixed_schedules}
+
+    def _parse(content: str) -> SolarAnalysisResult:
+        return parse_solar_response(
+            content,
+            purpose=purpose,
+            candidate_task_ids=candidate_task_ids,
+            candidate_fixed_schedule_ids=candidate_fixed_schedule_ids,
+            analysis_mode="UNRESOLVED_ANSWER",
+            candidate_request_items=candidate_request_items,
+            expected_action=expected_action,
+            expected_entity_type=expected_entity_type,
+            expected_target_kind=expected_target_kind,
+            lock_target_entity_id=lock_target_entity_id,
+        )
+
+    return _call_and_parse_with_repair(messages, _parse)
+
+
+def _build_change_input_prompt_messages(
+    message: str,
+    *,
+    now: datetime,
+    cycle_start,
+    cycle_end,
+    candidate_tasks: list[dict],
+    candidate_fixed_schedules: list[dict],
+    candidate_request_items: list[dict],
+) -> list[dict]:
+    context = {
+        "now": now.astimezone(_SEOUL_TZ).isoformat(),
+        "cycleStart": cycle_start.isoformat() if cycle_start is not None else None,
+        "cycleEnd": cycle_end.isoformat() if cycle_end is not None else None,
+        "candidateTasks": candidate_tasks,
+        "candidateFixedSchedules": candidate_fixed_schedules,
+        "candidateRequestItems": candidate_request_items,
+    }
+    system_prompt = (
+        "당신은 '이음' 서비스에서 사용자가 이번 계획 요청 전체를 자유롭게 다시 편집하는 발화를"
+        " 분석하는 분석기입니다. 반드시 아래 JSON 스키마 하나로만 응답하세요.\n\n"
+        "최상위 키는 정확히 analysisMessage, items, unresolvedLine 세 개만 포함합니다. 각 item은"
+        " entityType, action, targetEntityId, targetKind, rawLineText, pendingQuestion을"
+        " 포함하고, targetKind는 \"ENTITY\"(실제 존재하는 TASK/FIXED_SCHEDULE) 또는"
+        " \"REQUEST_ITEM\"(이번 요청에서 아직 실행되지 않은 대기 중인 카드, candidateRequestItems"
+        " 중 하나) 중 하나입니다.\n"
+        "- action=\"CREATE\"+targetKind=\"REQUEST_ITEM\": candidateRequestItems 중 action이"
+        " 정확히 \"CREATE\"인 카드를 골라 일부 필드만 바꿀 때 씁니다. targetEntityId는 그 카드의"
+        " id, changedFields는 이번에 실제로 바꾸는 필드 이름 배열(빈 배열 금지, remainingMinutes"
+        " 포함 불가), normalizedPayload는 changedFields에 있는 필드만 값을 채우고 나머지는 기존"
+        " UPDATE 규칙처럼 null/deadlineState=MISSING으로 둡니다.\n"
+        "- action=\"CREATE\"이고 targetKind가 없거나 null: 완전히 새로운 카드를 추가합니다(기존"
+        " CREATE와 동일한 필수 키, normalizedPayload/deadlineState 사용).\n"
+        "- action=\"UPDATE\": targetKind는 반드시 \"ENTITY\"입니다(실제 항목만 직접 수정,"
+        " updateFields/normalizedPayload/deadlineState 사용).\n"
+        "- action=\"DELETE\"+targetKind=\"ENTITY\": 실제 항목을 삭제합니다. targetKind="
+        "\"REQUEST_ITEM\": candidateRequestItems 중 아무 action의 카드나 취소합니다(그 카드를"
+        " 요청에서 제거, action이 CREATE/UPDATE/DELETE 무엇이든 상관없습니다).\n"
+        "- 같은 (targetKind, entityType, targetEntityId) 조합을 이번 응답 안에서 두 item 이상이"
+        " 동시에 가리키면 안 됩니다.\n"
+        "unresolvedLine도 targetKind(\"ENTITY\"|\"REQUEST_ITEM\")를 포함해야 하며, action="
+        "\"UPDATE\"면 targetKind는 반드시 \"ENTITY\"입니다.\n\n"
+        "[응답 전 self-check — 응답을 만들기 직전 아래를 다시 확인하세요]\n"
+        "1. TASK item이라면 action이 무엇이든(CREATE는 targetKind 무관, UPDATE/DELETE도 마찬가지)"
+        " deadlineState 키를 반드시 포함하세요(targetKind=\"REQUEST_ITEM\"인 CREATE도 예외"
+        " 없습니다 — 빠뜨리면 응답 전체가 거부됩니다). FIXED_SCHEDULE item은 반대로 deadlineState를"
+        " 절대 포함하지 마세요.\n"
+        "2. 사용자가 candidateRequestItems 중 하나(아직 실행되지 않은 대기 카드)를 가리키며 내용을"
+        " 바꾸려 한다면, 그 카드의 현재 action이 \"CREATE\"인 한 반드시 action=\"CREATE\"+"
+        "targetKind=\"REQUEST_ITEM\"+changedFields로 표현하세요. action=\"UPDATE\"로 쓰면 안 됩니다"
+        "(UPDATE는 targetKind=\"ENTITY\", 즉 candidateTasks/candidateFixedSchedules의 실제 항목"
+        "에만 씁니다).\n"
+        "3. candidateRequestItems를 가리키는 게 전혀 아니고 완전히 새로운 항목을 추가하는"
+        " 문장이면 targetKind 키 자체를 생략하거나 null로 두고 targetEntityId는 반드시 null로"
+        " 두세요(REQUEST_ITEM으로 지어내거나 targetEntityId를 채우면 안 됩니다).\n"
+        "4. normalizedPayload는 TASK든 FIXED_SCHEDULE든 항상 정해진 키 전체(TASK는 title,"
+        " deadlineAt, estimatedMinutes, estimatedMinutesSource, remainingMinutes, amountText,"
+        " amountSource 일곱 개, FIXED_SCHEDULE은 title, startAt, endAt 세 개)를 빠짐없이"
+        " 포함하세요 — changedFields/updateFields에 없는 필드도 값만 null로 두고 키 자체는"
+        " 반드시 있어야 합니다.\n\n"
+        "[예시 — action=\"CREATE\"+targetKind=\"REQUEST_ITEM\", candidateRequestItems에 id"
+        " \"item-1\"인 CREATE 카드가 있고 그 카드의 예상 시간만 2시간으로 바꾸는 경우]\n"
+        "{\"entityType\": \"TASK\", \"action\": \"CREATE\", \"targetEntityId\": \"item-1\","
+        " \"targetKind\": \"REQUEST_ITEM\", \"rawLineText\": \"그거 예상 시간 2시간으로\","
+        " \"deadlineState\": \"MISSING\", \"changedFields\": [\"estimatedMinutes\"],"
+        " \"normalizedPayload\": {\"title\": null, \"deadlineAt\": null, \"estimatedMinutes\":"
+        " 120, \"estimatedMinutesSource\": \"USER\", \"remainingMinutes\": null, \"amountText\":"
+        " null, \"amountSource\": null}, \"pendingQuestion\": null}\n\n"
+        f"[컨텍스트]\n{json.dumps(context, ensure_ascii=False)}"
+    )
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": message},
+    ]
+
+
+def analyze_change_input(
+    message: str,
+    *,
+    now: datetime,
+    purpose: SolarRequestPurpose,
+    cycle_start=None,
+    cycle_end=None,
+    candidate_tasks: list[dict] | None = None,
+    candidate_fixed_schedules: list[dict] | None = None,
+    candidate_request_items: dict[str, dict] | None = None,
+) -> SolarAnalysisResult:
+    """CHANGE_INPUT 전용 진입점. `candidate_request_items`의 값 dict는 파서 검증용
+    entityType/action을 최소한 포함해야 하며, 프롬프트 컨텍스트로도 그대로 노출된다."""
+    candidate_tasks = candidate_tasks or []
+    candidate_fixed_schedules = candidate_fixed_schedules or []
+    candidate_request_items = candidate_request_items or {}
+
+    prompt_request_items = [{"id": item_id, **info} for item_id, info in candidate_request_items.items()]
+    messages = _build_change_input_prompt_messages(
+        message,
+        now=now,
+        cycle_start=cycle_start,
+        cycle_end=cycle_end,
+        candidate_tasks=candidate_tasks,
+        candidate_fixed_schedules=candidate_fixed_schedules,
+        candidate_request_items=prompt_request_items,
+    )
+    candidate_task_ids = {str(c["id"]) for c in candidate_tasks}
+    candidate_fixed_schedule_ids = {str(c["id"]) for c in candidate_fixed_schedules}
+
+    def _parse(content: str) -> SolarAnalysisResult:
+        return parse_solar_response(
+            content,
+            purpose=purpose,
+            candidate_task_ids=candidate_task_ids,
+            candidate_fixed_schedule_ids=candidate_fixed_schedule_ids,
+            analysis_mode="CHANGE_INPUT",
+            candidate_request_items=candidate_request_items,
+        )
+
+    return _call_and_parse_with_repair(messages, _parse)

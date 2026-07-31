@@ -8,7 +8,7 @@ from app.core.clock import get_current_moment
 from app.core.security import AuthenticatedUser, get_current_user
 from app.db.session import get_db
 from app.schemas.plan_management import PlanManagementStateResponse, to_plan_management_state_response
-from app.schemas.solar_request import CreateSolarRequestBody
+from app.schemas.solar_request import CreateSolarDecisionBody, CreateSolarMessageBody, CreateSolarRequestBody
 from app.services import plan_management_service, solar_request_service
 
 router = APIRouter()
@@ -42,3 +42,62 @@ def create_solar_request(
     )
     response.status_code = 201 if result.created else 200
     return to_plan_management_state_response(result.state)
+
+
+@router.post("/solar/requests/{solarRequestId}/messages", response_model=PlanManagementStateResponse)
+def create_solar_message(
+    body: CreateSolarMessageBody,
+    request_id: uuid.UUID = Path(alias="solarRequestId"),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    now: datetime = Depends(get_current_moment),
+) -> PlanManagementStateResponse:
+    state = solar_request_service.add_solar_message(
+        db,
+        user_id=current_user.id,
+        request_id=request_id,
+        client_event_id=body.client_event_id,
+        message=body.message,
+        now=now,
+    )
+    return to_plan_management_state_response(state)
+
+
+@router.post("/solar/requests/{solarRequestId}/decisions", response_model=PlanManagementStateResponse)
+def create_solar_decision(
+    body: CreateSolarDecisionBody,
+    request_id: uuid.UUID = Path(alias="solarRequestId"),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    now: datetime = Depends(get_current_moment),
+) -> PlanManagementStateResponse:
+    state = solar_request_service.add_solar_decision(
+        db,
+        user_id=current_user.id,
+        request_id=request_id,
+        client_event_id=body.client_event_id,
+        decision=body.decision,
+        now=now,
+    )
+    return to_plan_management_state_response(state)
+
+
+@router.post("/solar/requests/{solarRequestId}/reopen", response_model=PlanManagementStateResponse)
+def reopen_solar_request(
+    request_id: uuid.UUID = Path(alias="solarRequestId"),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    now: datetime = Depends(get_current_moment),
+) -> PlanManagementStateResponse:
+    state = solar_request_service.reopen_solar_request(db, user_id=current_user.id, request_id=request_id, now=now)
+    return to_plan_management_state_response(state)
+
+
+@router.delete("/solar/requests/{solarRequestId}", status_code=204)
+def delete_solar_request(
+    request_id: uuid.UUID = Path(alias="solarRequestId"),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    solar_request_service.delete_solar_request(db, user_id=current_user.id, request_id=request_id)
+    return Response(status_code=204)
