@@ -12,6 +12,7 @@ dependencies = [
     "alembic",
     "python-dotenv",
     "PyJWT[crypto]>=2.8,<3",
+    "google-genai",
 ]
 
 [project.optional-dependencies]
