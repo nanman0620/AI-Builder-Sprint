@@ -15,6 +15,7 @@ import {
   sendSolarMessage,
   submitSolarDecision,
 } from '../api/solar-requests';
+import { applyAcknowledgeResult } from '../logic';
 import type {
   DecisionOption,
   ExecutionStartResponse,
@@ -456,7 +457,13 @@ export function usePlanManagement() {
     if (!beginAction(actionKey)) return false;
     setActionError(null);
     try {
-      await acknowledgeSolarRequestResult(requestId);
+      const result = await acknowledgeSolarRequestResult(requestId);
+      // 서버가 이미 result_acknowledged_at을 저장했으므로, 다음 탭 재포커스(GET
+      // /plan-management/state)를 기다리지 않고 로컬 상태를 곧바로 다음 화면으로 전환한다.
+      // 그렇지 않으면 탭이 마운트된 채로 남아 있는 동안 EXECUTION_SUCCESS가 그대로 보일 수 있다.
+      stateRequestIdRef.current += 1;
+      stateInFlightRef.current = null;
+      setState((previous) => (previous ? applyAcknowledgeResult(previous, result) : previous));
       return true;
     } catch (error) {
       if (error instanceof ApiClientError && error.code === 'INVALID_REQUEST_STATE') {

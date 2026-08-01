@@ -2,41 +2,9 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager
 
-from sqlalchemy.sql import operators
-from sqlalchemy.sql.elements import BindParameter, BooleanClauseList, Null, TextClause
+from sqlalchemy.sql.elements import TextClause
 
-
-def _resolve_operand(side, obj):
-    if isinstance(side, BindParameter):
-        return side.value
-    if isinstance(side, Null):
-        return None
-    key = getattr(side, "key", None)
-    if key is not None and hasattr(obj, key):
-        return getattr(obj, key)
-    raise AssertionError(f"FakeSettlementSession이 처리할 수 없는 조건식입니다: {side!r}")
-
-
-def _eval_clause(clause, obj) -> bool:
-    if isinstance(clause, BooleanClauseList):
-        results = [_eval_clause(sub, obj) for sub in clause.clauses]
-        operator_name = getattr(clause.operator, "__name__", "")
-        if operator_name == "and_":
-            return all(results)
-        if operator_name == "or_":
-            return any(results)
-        raise AssertionError(f"지원하지 않는 불리언 연산자입니다: {clause.operator}")
-    left = _resolve_operand(clause.left, obj)
-    right = _resolve_operand(clause.right, obj)
-    if clause.operator is operators.in_op:
-        return left in right
-    if clause.operator is operators.not_in_op:
-        return left not in right
-    if clause.operator is operators.is_:
-        return left is right
-    if clause.operator is operators.is_not:
-        return left is not right
-    return bool(clause.operator(left, right))
+from tests.support_sql_eval import eval_clause as _eval_clause
 
 
 class _FakeScalars:
