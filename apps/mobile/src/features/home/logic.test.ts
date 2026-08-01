@@ -8,6 +8,8 @@ import {
   computeOptimisticProgress,
   formatLogicalDateBadge,
   formatPeriodLabel,
+  PlanBlockPendingRegistry,
+  replacePlanBlock,
   resolveHomeMascotKey,
   resolveProgressMascotBand,
   resolveScoreBand,
@@ -155,6 +157,102 @@ test('optimistic progress는 checked/total 개수 기준이다(시간 비율 아
 
 test('optimistic progress는 PlanBlock이 없으면 0%다', () => {
   assert.deepEqual(computeOptimisticProgress([]), { checkedCount: 0, totalCount: 0, percentage: 0 });
+});
+
+test('pending registry는 동일 PlanBlock의 연속 요청만 거부한다', () => {
+  const registry = new PlanBlockPendingRegistry();
+  const tokenA = registry.begin('a');
+  const tokenB = registry.begin('b');
+
+  assert.ok(tokenA);
+  assert.ok(tokenB);
+  assert.equal(registry.begin('a'), null);
+  assert.equal(registry.owns('a', tokenA), true);
+  assert.equal(registry.owns('b', tokenB), true);
+});
+
+test('이전 요청 token은 이후 요청의 pending을 해제할 수 없다', () => {
+  const registry = new PlanBlockPendingRegistry();
+  const oldToken = registry.begin('a');
+  assert.ok(oldToken);
+  assert.equal(registry.finish('a', oldToken), true);
+
+  const newToken = registry.begin('a');
+  assert.ok(newToken);
+  assert.equal(registry.finish('a', oldToken), false);
+  assert.equal(registry.owns('a', newToken), true);
+});
+
+test('reset은 이전 token의 소유권을 무효화한다', () => {
+  const registry = new PlanBlockPendingRegistry();
+  const oldToken = registry.begin('a');
+  assert.ok(oldToken);
+
+  registry.clear();
+  const newToken = registry.begin('a');
+  assert.ok(newToken);
+  assert.equal(registry.owns('a', oldToken), false);
+  assert.equal(registry.owns('a', newToken), true);
+});
+
+test('서로 다른 PlanBlock 응답을 역순 병합해도 두 상태와 진행률을 유지한다', () => {
+  let blocks = [makeBlock({ id: 'a' }), makeBlock({ id: 'b' })];
+  blocks = applyOptimisticCheckState(blocks, 'a', true, '2026-07-29T10:00:00+09:00');
+  blocks = applyOptimisticCheckState(blocks, 'b', true, '2026-07-29T10:00:01+09:00');
+
+  blocks = replacePlanBlock(
+    blocks,
+    makeBlock({ id: 'b', status: 'CHECKED', checkedAt: '2026-07-29T10:00:03+09:00' })
+  );
+  blocks = replacePlanBlock(
+    blocks,
+    makeBlock({ id: 'a', status: 'CHECKED', checkedAt: '2026-07-29T10:00:02+09:00' })
+  );
+
+  assert.deepEqual(blocks.map((block) => block.status), ['CHECKED', 'CHECKED']);
+  assert.deepEqual(computeOptimisticProgress(blocks), {
+    checkedCount: 2,
+    totalCount: 2,
+    percentage: 100,
+  });
+});
+
+test('A 성공 후 B 실패 rollback은 B만 복원한다', () => {
+  const originalB = makeBlock({ id: 'b' });
+  let blocks = [makeBlock({ id: 'a' }), originalB];
+  blocks = applyOptimisticCheckState(blocks, 'a', true, '2026-07-29T10:00:00+09:00');
+  blocks = applyOptimisticCheckState(blocks, 'b', true, '2026-07-29T10:00:01+09:00');
+  blocks = replacePlanBlock(
+    blocks,
+    makeBlock({ id: 'a', status: 'CHECKED', checkedAt: '2026-07-29T10:00:02+09:00' })
+  );
+  blocks = replacePlanBlock(blocks, originalB);
+
+  assert.deepEqual(blocks.map((block) => block.status), ['CHECKED', 'PLANNED']);
+  assert.deepEqual(computeOptimisticProgress(blocks), {
+    checkedCount: 1,
+    totalCount: 2,
+    percentage: 50,
+  });
+});
+
+test('A 실패 후 B 성공이어도 늦은 A rollback이 B를 덮지 않는다', () => {
+  const originalA = makeBlock({ id: 'a' });
+  let blocks = [originalA, makeBlock({ id: 'b' })];
+  blocks = applyOptimisticCheckState(blocks, 'a', true, '2026-07-29T10:00:00+09:00');
+  blocks = applyOptimisticCheckState(blocks, 'b', true, '2026-07-29T10:00:01+09:00');
+  blocks = replacePlanBlock(
+    blocks,
+    makeBlock({ id: 'b', status: 'CHECKED', checkedAt: '2026-07-29T10:00:02+09:00' })
+  );
+  blocks = replacePlanBlock(blocks, originalA);
+
+  assert.deepEqual(blocks.map((block) => block.status), ['PLANNED', 'CHECKED']);
+  assert.deepEqual(computeOptimisticProgress(blocks), {
+    checkedCount: 1,
+    totalCount: 2,
+    percentage: 50,
+  });
 });
 
 test('logicalDate 배지 포맷은 기기 로컬 타임존과 무관하게 같은 날짜를 표시한다', () => {
