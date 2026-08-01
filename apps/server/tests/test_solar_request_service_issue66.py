@@ -27,6 +27,59 @@ from app.services.solar_client import (
     SolarAnalysisItem,
 )
 
+
+class _TransactionBoundary:
+    def __init__(self, db):
+        self.db = db
+
+    def __enter__(self):
+        if self.db.active:
+            raise RuntimeError("A transaction is already begun on this Session.")
+        self.db.active = True
+        self._message_count = len(self.db.persisted_messages)
+        self._item_count = len(self.db.persisted_items)
+        self._status = self.db.request.status
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.db.active = False
+        if exc_type is None:
+            self.db.commit_count += 1
+        else:
+            self.db.rollback_count += 1
+            del self.db.persisted_messages[self._message_count :]
+            del self.db.persisted_items[self._item_count :]
+            self.db.request.status = self._status
+        return False
+
+
+class _TransactionTrackingDb:
+    def __init__(self):
+        self.active = False
+        self.commit_count = 0
+        self.rollback_count = 0
+        self.persisted_messages = []
+        self.persisted_items = []
+        self.request = _GuardedRequest(self)
+
+    def begin(self):
+        return _TransactionBoundary(self)
+
+
+class _GuardedRequest:
+    def __init__(self, db):
+        self._db = db
+        self.id = uuid.uuid4()
+        self.user_id = USER_ID
+        self.plan_cycle_id = None
+        self.status = SolarRequestStatus.CHANGE_INPUT
+
+    @property
+    def purpose(self):
+        if not self._db.active:
+            self._db.active = True
+        return SolarRequestPurpose.NEW_CYCLE
+
 USER_ID = uuid.uuid4()
 NOW = datetime(2026, 7, 31, 12, 0, tzinfo=timezone.utc)
 
@@ -584,3 +637,103 @@ def test_filter_request_item_candidates_delete_offers_all_actions():
     update_item = _make_item(item_order=2, action="UPDATE", status="READY")
     result = solar_request_service._filter_request_item_candidates("DELETE", "TASK", [create_item, update_item])
     assert set(result.keys()) == {str(create_item.id), str(update_item.id)}
+
+
+# ---------------------------------------------------------------------------
+# add_solar_message transaction boundaries
+# ---------------------------------------------------------------------------
+
+
+def _configure_message_transaction_test(monkeypatch, db, *, fail_on_persist_call=None):
+    dispatch = solar_request_service._MessageDispatch(kind="CHANGE_INPUT")
+    persist_calls = 0
+
+    monkeypatch.setattr(solar_request_service, "_lock_owned_solar_request", lambda *_: db.request)
+    monkeypatch.setattr(solar_request_service, "_find_message_by_client_event_id", lambda *_: None)
+    monkeypatch.setattr(solar_request_service, "_load_items", lambda *_: [])
+    monkeypatch.setattr(solar_request_service, "_load_messages", lambda *_: [])
+    monkeypatch.setattr(solar_request_service, "_resolve_message_dispatch", lambda *_: dispatch)
+    monkeypatch.setattr(
+        solar_request_service.solar_client,
+        "analyze_change_input",
+        lambda *args, **kwargs: ChangeInputAnalysisResult("반영했어요.", [], None),
+    )
+    monkeypatch.setattr(
+        solar_request_service,
+        "_apply_change_input_operations",
+        lambda *args, **kwargs: db.persisted_items.append(object()),
+    )
+    monkeypatch.setattr(
+        solar_request_service,
+        "_recompute_request_collecting_state",
+        lambda request, items: (None, None),
+    )
+
+    def persist(*args, entries, **kwargs):
+        nonlocal persist_calls
+        persist_calls += 1
+        db.persisted_messages.extend(entries)
+        if persist_calls == fail_on_persist_call:
+            db.request.status = SolarRequestStatus.FINAL_REVIEW
+            raise RuntimeError("write failed")
+
+    monkeypatch.setattr(solar_request_service, "_persist_ordered_messages", persist)
+    monkeypatch.setattr(
+        "app.services.plan_management_service.get_solar_request_detail_state",
+        lambda *args, **kwargs: object(),
+    )
+
+
+def _add_message(db, *, event_id, message):
+    return solar_request_service.add_solar_message(
+        db,
+        user_id=USER_ID,
+        request_id=db.request.id,
+        client_event_id=event_id,
+        message=message,
+        now=NOW,
+    )
+
+
+def test_add_solar_message_same_request_consecutive_messages_use_clean_transactions(monkeypatch):
+    db = _TransactionTrackingDb()
+    _configure_message_transaction_test(monkeypatch, db)
+
+    _add_message(
+        db,
+        event_id="evt-1",
+        message="영단어 오늘 5시 50분까지 20개 외워야 해. 10분 정도 걸릴 것 같아.",
+    )
+    _add_message(db, event_id="evt-2", message="네")
+
+    assert db.active is False
+    assert db.commit_count == 4
+    assert db.rollback_count == 0
+    assert len(db.persisted_items) == 2
+    assert [entry["content"] for entry in db.persisted_messages if entry["role"] == SolarMessageRole.USER] == [
+        "영단어 오늘 5시 50분까지 20개 외워야 해. 10분 정도 걸릴 것 같아.",
+        "네",
+    ]
+
+
+def test_add_solar_message_write_failure_rolls_back_second_phase_once(monkeypatch):
+    db = _TransactionTrackingDb()
+    _configure_message_transaction_test(monkeypatch, db, fail_on_persist_call=2)
+
+    _add_message(
+        db,
+        event_id="evt-1",
+        message="영단어 오늘 5시 50분까지 20개 외워야 해. 10분 정도 걸릴 것 같아.",
+    )
+    committed_messages = list(db.persisted_messages)
+    committed_items = list(db.persisted_items)
+
+    with pytest.raises(RuntimeError, match="write failed"):
+        _add_message(db, event_id="evt-2", message="네")
+
+    assert db.active is False
+    assert db.commit_count == 3
+    assert db.rollback_count == 1
+    assert db.persisted_messages == committed_messages
+    assert db.persisted_items == committed_items
+    assert db.request.status == SolarRequestStatus.CHANGE_INPUT
