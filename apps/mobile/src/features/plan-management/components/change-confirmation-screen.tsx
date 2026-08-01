@@ -2,10 +2,9 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 
 import { colors, spacing, typography } from '@/src/constants/tokens';
 
-import { getVisibleConversationMessages } from '../logic';
+import { buildConversationTimeline } from '../logic';
 import type { DecisionOption, SolarRequest } from '../types';
-import { ChatMessageBubble } from './chat-message-bubble';
-import { RequestItemCard } from './request-item-card';
+import { ConversationTimeline } from './conversation-timeline';
 
 type ChangeConfirmationScreenProps = {
   request: SolarRequest;
@@ -20,25 +19,14 @@ export function ChangeConfirmationScreen({
   actionError,
   onDecision,
 }: ChangeConfirmationScreenProps) {
-  const sortedItems = [...request.requestItems].sort((a, b) => a.itemOrder - b.itemOrder);
-  const sortedMessages = getVisibleConversationMessages(request);
+  const timeline = buildConversationTimeline(request);
   const prompt = request.decisionPrompt;
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      {sortedItems.map((item) => (
-        <RequestItemCard key={item.id} item={item} />
-      ))}
-      {sortedItems.length > 0 ? (
-        <Text style={styles.guidance}>모호한 항목은 따로 질문하고 나머지는 이대로 확정해요.</Text>
-      ) : null}
-      <View style={styles.messages}>
-        {sortedMessages.map((message) => (
-          <ChatMessageBubble key={message.id} message={message} />
-        ))}
-      </View>
-      <View style={styles.options}>
-        {prompt?.options.map((option) => (
+      <ConversationTimeline entries={timeline} />
+      {prompt ? <View style={styles.options}>
+        {prompt.options.map((option) => (
           <Pressable
             key={option.value}
             style={[styles.option, isSubmitting && styles.disabled]}
@@ -47,7 +35,7 @@ export function ChangeConfirmationScreen({
             <Text style={styles.optionText}>{option.label}</Text>
           </Pressable>
         ))}
-      </View>
+      </View> : null}
       {isSubmitting ? <ActivityIndicator color={colors.primary} style={styles.loading} /> : null}
       {actionError ? <Text style={styles.error}>{actionError}</Text> : null}
     </ScrollView>
@@ -59,14 +47,6 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     backgroundColor: colors.background,
     flexGrow: 1,
-  },
-  guidance: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    marginBottom: spacing.lg,
-  },
-  messages: {
-    gap: spacing.sm,
   },
   options: {
     flexDirection: 'row',

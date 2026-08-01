@@ -106,6 +106,31 @@ def _make_cycle(**overrides):
     return PlanningCycle(**defaults)
 
 
+def test_request_item_snapshot_reuses_card_display_rules_and_is_immutable_value():
+    item = _make_item(
+        action=SolarAction.DELETE,
+        status=SolarItemStatus.READY,
+        normalized_payload={"title": "발표 대본", "deadlineAt": None},
+    )
+
+    snapshot = svc.build_request_item_snapshot_value(item)
+    item.normalized_payload = {"title": "나중 값", "deadlineAt": None}
+
+    assert snapshot == {
+        "requestItemId": str(item.id),
+        "itemOrder": 1,
+        "action": "DELETE",
+        "actionLabel": "삭제",
+        "entityType": "TASK",
+        "entityLabel": "할 일",
+        "status": "READY",
+        "statusLabel": "준비됨",
+        "title": "발표 대본",
+        "summaryText": "삭제 예정",
+        "missingFields": [],
+    }
+
+
 # ---------------------------------------------------------------------------
 # _build_solar_request_detail — screenMode별(요청이 존재하는 7개) 동작
 # ---------------------------------------------------------------------------

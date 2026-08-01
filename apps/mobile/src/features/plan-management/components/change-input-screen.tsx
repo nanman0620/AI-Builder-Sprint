@@ -3,11 +3,10 @@ import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleShe
 
 import { colors, spacing, typography } from '@/src/constants/tokens';
 
-import { getVisibleConversationMessages } from '../logic';
+import { buildConversationTimeline } from '../logic';
 import type { SolarRequest } from '../types';
-import { ChatMessageBubble } from './chat-message-bubble';
+import { ConversationTimeline } from './conversation-timeline';
 import { MessageInput } from './message-input';
-import { RequestItemCard } from './request-item-card';
 
 type ChangeInputScreenProps = {
   request: SolarRequest;
@@ -18,8 +17,7 @@ type ChangeInputScreenProps = {
 
 export function ChangeInputScreen({ request, isSubmitting, actionError, onSendMessage }: ChangeInputScreenProps) {
   const [value, setValue] = useState('');
-  const sortedItems = [...request.requestItems].sort((a, b) => a.itemOrder - b.itemOrder);
-  const sortedMessages = getVisibleConversationMessages(request);
+  const timeline = buildConversationTimeline(request);
 
   const handleSubmit = () => {
     const trimmed = value.trim();
@@ -31,13 +29,8 @@ export function ChangeInputScreen({ request, isSubmitting, actionError, onSendMe
   return (
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        {sortedItems.map((item) => (
-          <RequestItemCard key={item.id} item={item} highlighted={item.id === request.pendingItemId} />
-        ))}
         <View style={styles.messages}>
-          {sortedMessages.map((message) => (
-            <ChatMessageBubble key={message.id} message={message} />
-          ))}
+          <ConversationTimeline entries={timeline} />
         </View>
         {isSubmitting ? (
           <View style={styles.loading}>
