@@ -452,6 +452,176 @@ test('requestItems가 비어 있으면 legacy fallback 영역을 만들지 않�
   assert.equal(buildConversationTimeline(request).length, 0);
 });
 
+function cardQuestion(
+  id: string,
+  sequenceNo: number,
+  itemId: string,
+  field: string,
+  content = '부족한 정보를 알려 주세요.',
+) {
+  return {
+    id,
+    role: 'ASSISTANT' as const,
+    kind: 'QUESTION' as const,
+    content,
+    sequenceNo,
+    createdAt: '',
+    metadata: { itemId, field },
+  };
+}
+
+test('카드 snapshot 뒤와 실제 질문 앞에 대상 안내를 정확히 한 번 추가한다', () => {
+  const request = makeRequest({
+    status: 'COLLECTING',
+    decisionPrompt: null,
+    messages: [
+      { id: 'user', role: 'USER', kind: 'TEXT', content: '과제', sequenceNo: 1, createdAt: '', metadata: {} },
+      messageWithSnapshots('analysis', 2, '분석했어요.', [
+        snapshot({ title: '운영체제 과제', missingFields: ['estimatedMinutes'] }),
+      ]),
+      cardQuestion('question', 3, 'item-1', 'estimatedMinutes', '예상 소요 시간은 얼마나 되나요?'),
+    ],
+  });
+  const timeline = buildConversationTimeline(request);
+  assert.deepEqual(timeline.map((entry) => entry.type), [
+    'MESSAGE', 'MESSAGE', 'REQUEST_ITEM_SNAPSHOT', 'QUESTION_TARGET_INTRO', 'MESSAGE',
+  ]);
+  assert.deepEqual(timeline.filter((entry) => entry.type === 'QUESTION_TARGET_INTRO'), [{
+    type: 'QUESTION_TARGET_INTRO', id: 'question-target-intro:question', requestItemId: 'item-1',
+    title: '운영체제 과제', message: '운영체제 과제에 대해 질문할게요.',
+  }]);
+  assert.equal(timeline.filter((entry) => entry.type === 'MESSAGE' && entry.message.id === 'question').length, 1);
+});
+
+test('혼합 카드에서 question itemId와 일치하는 Task title만 선택한다', () => {
+  const request = makeRequest({ status: 'COLLECTING', decisionPrompt: null, messages: [
+    messageWithSnapshots('analysis', 1, '분석', [
+      snapshot({ title: '운영체제 과제', missingFields: ['amount'] }),
+      snapshot({ snapshotId: 'snapshot-2', requestItemId: 'item-2', itemOrder: 2, entityType: 'FIXED_SCHEDULE', title: '알바', status: 'READY', missingFields: [] }),
+    ]),
+    cardQuestion('question', 2, 'item-1', 'amount'),
+  ] });
+  const timeline = buildConversationTimeline(request);
+  assert.deepEqual(timeline.filter((entry) => entry.type === 'QUESTION_TARGET_INTRO').map((entry) => entry.title), ['운영체제 과제']);
+  assert.equal(timeline.filter((entry) => entry.type === 'REQUEST_ITEM_SNAPSHOT').length, 2);
+});
+
+test('FixedSchedule 부족 질문에도 해당 snapshot title 안내를 추가한다', () => {
+  const request = makeRequest({ status: 'COLLECTING', decisionPrompt: null, messages: [
+    messageWithSnapshots('analysis', 1, '분석', [snapshot({ entityType: 'FIXED_SCHEDULE', title: '알바', missingFields: ['endAt'] })]),
+    cardQuestion('question', 2, 'item-1', 'endAt', '종료 시간은 언제인가요?'),
+  ] });
+  assert.equal(buildConversationTimeline(request).find((entry) => entry.type === 'QUESTION_TARGET_INTRO')?.message, '알바에 대해 질문할게요.');
+});
+
+test('같은 item의 연속 질문마다 안내와 질문을 한 번씩 유지한다', () => {
+  const request = makeRequest({ status: 'COLLECTING', decisionPrompt: null, messages: [
+    messageWithSnapshots('analysis-1', 1, '분석', [snapshot({ title: '자료구조 과제' })]),
+    cardQuestion('question-1', 2, 'item-1', 'estimatedMinutes'),
+    { id: 'answer', role: 'USER', kind: 'TEXT', content: '2시간', sequenceNo: 3, createdAt: '', metadata: {} },
+    messageWithSnapshots('analysis-2', 4, '반영', [snapshot({ snapshotId: 'snapshot-2', title: '자료구조 과제', missingFields: ['deadlineAt'] })]),
+    cardQuestion('question-2', 5, 'item-1', 'deadlineAt'),
+  ] });
+  const timeline = buildConversationTimeline(request);
+  assert.deepEqual(timeline.filter((entry) => entry.type === 'QUESTION_TARGET_INTRO').map((entry) => entry.id), ['question-target-intro:question-1', 'question-target-intro:question-2']);
+  assert.equal(timeline.filter((entry) => entry.type === 'MESSAGE' && entry.message.kind === 'QUESTION').length, 2);
+});
+
+test('여러 item의 순차 질문은 각 item의 최신 과거 snapshot title을 사용한다', () => {
+  const request = makeRequest({ status: 'COLLECTING', decisionPrompt: null, messages: [
+    messageWithSnapshots('analysis-1', 1, '분석', [
+      snapshot({ title: '운영체제 과제' }),
+      snapshot({ snapshotId: 'snapshot-2', requestItemId: 'item-2', itemOrder: 2, title: '발표 대본' }),
+    ]),
+    cardQuestion('question-1', 2, 'item-1', 'amount'),
+    { id: 'answer', role: 'USER', kind: 'TEXT', content: '답변', sequenceNo: 3, createdAt: '', metadata: {} },
+    cardQuestion('question-2', 4, 'item-2', 'estimatedMinutes'),
+  ] });
+  assert.deepEqual(buildConversationTimeline(request).filter((entry) => entry.type === 'QUESTION_TARGET_INTRO').map((entry) => entry.title), ['운영체제 과제', '발표 대본']);
+});
+
+test('미래 title을 과거 질문에 소급하지 않고 질문 시점의 최신 snapshot을 사용한다', () => {
+  const request = makeRequest({ status: 'COLLECTING', decisionPrompt: null,
+    requestItems: [makeRequestItem({ title: '자료구조 최종 과제' })], messages: [
+      messageWithSnapshots('analysis-1', 1, '처음', [snapshot({ title: '자료구조 과제' })]),
+      cardQuestion('question-1', 2, 'item-1', 'amount'),
+      { id: 'answer', role: 'USER', kind: 'TEXT', content: '답변', sequenceNo: 3, createdAt: '', metadata: {} },
+      messageWithSnapshots('analysis-2', 4, '수정', [snapshot({ snapshotId: 'snapshot-2', title: '자료구조 최종 과제', missingFields: ['deadlineAt'] })]),
+      cardQuestion('question-2', 5, 'item-1', 'deadlineAt'),
+    ] });
+  assert.deepEqual(buildConversationTimeline(request).filter((entry) => entry.type === 'QUESTION_TARGET_INTRO').map((entry) => entry.message), ['자료구조 과제에 대해 질문할게요.', '자료구조 최종 과제에 대해 질문할게요.']);
+});
+
+test('legacy 활성 질문 직전에 최신 카드 목록과 대상 안내를 각각 한 번 배치한다', () => {
+  const request = makeRequest({ status: 'COLLECTING', decisionPrompt: null,
+    requestItems: [
+      makeRequestItem({ id: 'item-2', itemOrder: 2, title: '알바', entityType: 'FIXED_SCHEDULE' }),
+      makeRequestItem({ title: '운영체제 과제', status: 'INFO_MISSING', missingFields: ['amount'] }),
+    ], messages: [
+      { id: 'user', role: 'USER', kind: 'TEXT', content: '입력', sequenceNo: 1, createdAt: '', metadata: {} },
+      { id: 'analysis', role: 'ASSISTANT', kind: 'TEXT', content: '분석', sequenceNo: 2, createdAt: '', metadata: {} },
+      cardQuestion('question', 3, 'item-1', 'amount'),
+    ] });
+  const timeline = buildConversationTimeline(request);
+  assert.deepEqual(timeline.map((entry) => entry.type), ['MESSAGE', 'MESSAGE', 'LEGACY_CURRENT_REQUEST_ITEM', 'LEGACY_CURRENT_REQUEST_ITEM', 'QUESTION_TARGET_INTRO', 'MESSAGE']);
+  assert.equal(timeline.filter((entry) => entry.type === 'LEGACY_CURRENT_REQUEST_ITEM').length, 2);
+  assert.equal(timeline.filter((entry) => entry.type === 'QUESTION_TARGET_INTRO').length, 1);
+});
+
+test('malformed snapshot만 있는 legacy 요청도 itemId 일치 title로 안전하게 안내한다', () => {
+  const request = makeRequest({ status: 'COLLECTING', decisionPrompt: null,
+    requestItems: [makeRequestItem({ title: '운영체제 과제' })], messages: [
+      { id: 'analysis', role: 'ASSISTANT', kind: 'TEXT', content: '분석', sequenceNo: 1, createdAt: '', metadata: { snapshotVersion: 1, requestItemSnapshots: [{ snapshotId: 'broken' }] } },
+      cardQuestion('question', 2, 'item-1', 'amount'),
+    ] });
+  assert.equal(buildConversationTimeline(request).find((entry) => entry.type === 'QUESTION_TARGET_INTRO')?.title, '운영체제 과제');
+});
+
+test('혼합 history에서는 snapshot 없는 item을 최신 requestItems로 보충하지 않는다', () => {
+  const request = makeRequest({ status: 'COLLECTING', decisionPrompt: null,
+    requestItems: [makeRequestItem({ id: 'item-2', title: '최신 제목' })], messages: [
+      messageWithSnapshots('analysis', 1, '분석', [snapshot({ title: 'snapshot 제목' })]),
+      cardQuestion('question-1', 2, 'item-1', 'amount'),
+      { id: 'answer', role: 'USER', kind: 'TEXT', content: '답', sequenceNo: 3, createdAt: '', metadata: {} },
+      cardQuestion('question-2', 4, 'item-2', 'amount'),
+    ] });
+  const timeline = buildConversationTimeline(request);
+  assert.deepEqual(timeline.filter((entry) => entry.type === 'QUESTION_TARGET_INTRO').map((entry) => entry.id), ['question-target-intro:question-1']);
+  assert.equal(timeline.filter((entry) => entry.type === 'LEGACY_CURRENT_REQUEST_ITEM').length, 0);
+});
+
+test('대상 item을 찾지 못하면 안내만 생략하고 원래 질문은 유지한다', () => {
+  const request = makeRequest({ status: 'COLLECTING', decisionPrompt: null, messages: [
+    messageWithSnapshots('analysis', 1, '분석', [snapshot()]),
+    cardQuestion('question', 2, 'missing-item', 'amount'),
+  ] });
+  const timeline = buildConversationTimeline(request);
+  assert.equal(timeline.filter((entry) => entry.type === 'QUESTION_TARGET_INTRO').length, 0);
+  assert.equal(timeline.filter((entry) => entry.type === 'MESSAGE' && entry.message.id === 'question').length, 1);
+});
+
+test('대상 모호성, CHANGE_DETAILS, 저장·합성 decision prompt에는 안내를 추가하지 않는다', () => {
+  const request = makeRequest({ messages: [
+    messageWithSnapshots('analysis', 1, '분석', [snapshot()]),
+    { id: 'unresolved', role: 'ASSISTANT', kind: 'QUESTION', content: '어떤 항목인가요?', sequenceNo: 2, createdAt: '', metadata: { unresolved: true, field: 'targetEntityId' } },
+    { id: 'change-details', role: 'ASSISTANT', kind: 'QUESTION', content: '무엇을 바꿀까요?', sequenceNo: 3, createdAt: '', metadata: { followUpType: 'CHANGE_DETAILS', field: 'title' } },
+    { id: 'decision', role: 'ASSISTANT', kind: 'QUESTION', content: '수정할까요?', sequenceNo: 4, createdAt: '', metadata: { itemId: 'item-1', field: 'amount', promptType: 'CHANGE_CONFIRMATION' } },
+  ] });
+  const timeline = buildConversationTimeline(request);
+  assert.equal(timeline.filter((entry) => entry.type === 'QUESTION_TARGET_INTRO').length, 0);
+  assert.equal(timeline.filter((entry) => entry.type === 'DECISION_PROMPT').length, 1);
+});
+
+test('동일 payload 재구성은 안정적인 intro ID와 중복 없는 timeline을 만든다', () => {
+  const request = makeRequest({ status: 'COLLECTING', decisionPrompt: null, messages: [
+    messageWithSnapshots('analysis', 1, '분석', [snapshot()]),
+    cardQuestion('stable-question-id', 2, 'item-1', 'amount'),
+  ] });
+  const first = buildConversationTimeline(request);
+  assert.deepEqual(first, buildConversationTimeline(request));
+  assert.deepEqual(first.filter((entry) => entry.type === 'QUESTION_TARGET_INTRO').map((entry) => entry.id), ['question-target-intro:stable-question-id']);
+});
+
 function makeRaw(overrides: Partial<RawExecutionResult> = {}): RawExecutionResult {
   return {
     createdTaskCount: 0,

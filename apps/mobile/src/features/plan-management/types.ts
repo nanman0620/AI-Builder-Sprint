@@ -128,6 +128,13 @@ export type RequestItemSnapshotMetadata = {
 export type ConversationTimelineEntry =
   | { type: 'MESSAGE'; id: string; message: ChatMessage }
   | { type: 'REQUEST_ITEM_SNAPSHOT'; id: string; snapshot: RequestItemSnapshot }
+  | {
+      type: 'QUESTION_TARGET_INTRO';
+      id: string;
+      requestItemId: string;
+      title: string;
+      message: string;
+    }
   | { type: 'LEGACY_CURRENT_REQUEST_ITEM'; id: string; item: SolarRequestItem }
   | { type: 'DECISION_PROMPT'; id: string; message: string };
 
