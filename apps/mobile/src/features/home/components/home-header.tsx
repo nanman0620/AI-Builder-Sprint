@@ -1,8 +1,12 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
 import { formatLogicalDateBadge } from '../logic';
+import { ShopComingSoonModal } from './shop-coming-soon-modal';
+
+const SHOP_ICON_SOURCE = require('@/assets/brand/shop-entry-icon.png');
 
 type HomeHeaderProps = {
   logicalDate: string;
@@ -17,24 +21,59 @@ type HomeHeaderProps = {
 export function HomeHeader({ logicalDate, badgeLabel, nickname, title, description }: HomeHeaderProps) {
   const trimmedNickname = nickname?.trim();
   const greeting = nickname !== undefined ? (trimmedNickname ? `${trimmedNickname}님,` : '안녕하세요,') : null;
+  const [headerContentHeight, setHeaderContentHeight] = useState(0);
+  const [isShopModalVisible, setIsShopModalVisible] = useState(false);
 
   return (
     <View style={styles.container}>
-      <View style={styles.badgeRow}>
-        <View style={styles.dateBadge}>
-          <Text style={styles.dateBadgeText}>{formatLogicalDateBadge(logicalDate)}</Text>
-        </View>
-        {badgeLabel ? (
-          <View style={styles.warningBadge}>
-            <Text style={styles.warningBadgeText}>{badgeLabel}</Text>
+      <View style={styles.headerRow}>
+        <View
+          style={styles.headerContent}
+          onLayout={({ nativeEvent }) => {
+            const nextHeight = nativeEvent.layout.height;
+            if (nextHeight !== headerContentHeight) {
+              setHeaderContentHeight(nextHeight);
+            }
+          }}>
+          <View style={styles.badgeRow}>
+            <View style={styles.dateBadge}>
+              <Text style={styles.dateBadgeText}>{formatLogicalDateBadge(logicalDate)}</Text>
+            </View>
+            {badgeLabel ? (
+              <View style={styles.warningBadge}>
+                <Text style={styles.warningBadgeText}>{badgeLabel}</Text>
+              </View>
+            ) : null}
           </View>
-        ) : null}
+          <Text style={styles.title}>
+            {greeting ? `${greeting}\n` : ''}
+            {title}
+          </Text>
+          {description ? <Text style={styles.description}>{description}</Text> : null}
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="상점 안내 열기"
+          hitSlop={spacing.sm}
+          onPress={() => setIsShopModalVisible(true)}
+          style={styles.shopButton}>
+          <Image
+            accessibilityIgnoresInvertColors
+            source={SHOP_ICON_SOURCE}
+            resizeMode="contain"
+            style={[
+              styles.shopIcon,
+              headerContentHeight > 0
+                ? { height: headerContentHeight *0.9, opacity: 1 }
+                : null,
+            ]}
+          />
+        </Pressable>
       </View>
-      <Text style={styles.title}>
-        {greeting ? `${greeting}\n` : ''}
-        {title}
-      </Text>
-      {description ? <Text style={styles.description}>{description}</Text> : null}
+      <ShopComingSoonModal
+        visible={isShopModalVisible}
+        onClose={() => setIsShopModalVisible(false)}
+      />
     </View>
   );
 }
@@ -42,7 +81,14 @@ export function HomeHeader({ logicalDate, badgeLabel, nickname, title, descripti
 const styles = StyleSheet.create({
   container: {
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
+    paddingTop: spacing.lg + 4,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  headerContent: {
+    flex: 1,
   },
   badgeRow: {
     flexDirection: 'row',
@@ -76,10 +122,22 @@ const styles = StyleSheet.create({
   title: {
     ...typography.title,
     color: colors.text,
+    fontSize: 17,
+    marginLeft: 8,
   },
   description: {
     ...typography.body,
     color: colors.textSecondary,
     marginTop: spacing.xs,
+  },
+  shopButton: {
+    marginLeft: spacing.md - 30 ,
+    marginRight: -30, 
+    marginTop: 6,
+  },
+  shopIcon: {
+    height: 1,
+    aspectRatio: 159 / 228,
+    opacity: 0,
   },
 });
