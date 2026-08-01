@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -28,6 +28,44 @@ def _setup(*, tasks=(), extra_rows=()):
     )
     db = FakeSchedulerSession().seed(cycle, *tasks, *extra_rows)
     return user_id, cycle_id, db
+
+
+def _schedule_structured_amount(
+    *, quantity: int, unit: str, period_capacities: tuple[int, ...]
+):
+    """Create one Task whose blocks have the requested per-period minute capacities."""
+    user_id, cycle_id, db = _setup()
+    period_starts = (
+        datetime(2026, 7, 29, 4, 0, tzinfo=SEOUL),
+        datetime(2026, 7, 29, 12, 0, tzinfo=SEOUL),
+        datetime(2026, 7, 29, 18, 0, tzinfo=SEOUL),
+    )
+    fixed_schedules = []
+    for capacity, period_start in zip(period_capacities, period_starts):
+        occupied_minutes = 240 - capacity
+        if occupied_minutes > 0:
+            fixed_schedules.append(
+                make_fixed_schedule(
+                    user_id=user_id,
+                    plan_cycle_id=cycle_id,
+                    start_at=period_start,
+                    end_at=period_start + timedelta(minutes=occupied_minutes),
+                )
+            )
+
+    task = make_task(
+        user_id=user_id,
+        plan_cycle_id=cycle_id,
+        remaining_minutes=sum(period_capacities),
+        title="자료구조 과제",
+        amount_text=f"{quantity}{unit}",
+        amount_source=AmountSource.USER,
+        created_at=_now(),
+    )
+    db.seed(task, *fixed_schedules)
+
+    result = svc.schedule_plan_blocks(db, user_id=user_id, plan_cycle_id=cycle_id, now=_now())
+    return task, result
 
 
 def test_schedule_plan_blocks_never_opens_or_commits_a_transaction():
@@ -358,6 +396,44 @@ def test_remainder_tie_break_is_deterministic_by_chronological_order():
     assert by_period[PlanPeriod.MORNING].allocated_amount_text == "2문제"
     assert by_period[PlanPeriod.AFTERNOON].allocated_amount_text == "2문제"
     assert by_period[PlanPeriod.EVENING].allocated_amount_text == "1문제"
+
+
+@pytest.mark.parametrize(
+    ("quantity", "unit", "period_capacities", "expected_counts"),
+    [
+        pytest.param(2, "문제", (30, 210), (1, 1), id="reported-30-210-regression"),
+        pytest.param(2, "페이지", (1, 239), (1, 1), id="extreme-two-block-ratio"),
+        pytest.param(3, "개", (1, 1, 238), (1, 1, 1), id="multiple-zero-shares"),
+        pytest.param(4, "문제", (1, 1, 238), (1, 1, 2), id="minimums-plus-remainder"),
+        pytest.param(3, "페이지", (1, 1, 238), (1, 1, 1), id="quantity-equals-block-count"),
+        pytest.param(5, "문제", (60, 60, 60), (2, 2, 1), id="existing-positive-result"),
+    ],
+)
+def test_amount_distribution_never_assigns_zero_and_preserves_quantity(
+    quantity, unit, period_capacities, expected_counts
+):
+    task, result = _schedule_structured_amount(
+        quantity=quantity,
+        unit=unit,
+        period_capacities=period_capacities,
+    )
+
+    ordered = sorted(
+        result.created_blocks,
+        key=lambda block: (block.plan_date, block.display_order),
+    )
+    actual_counts = tuple(
+        int(block.allocated_amount_text.removesuffix(unit)) for block in ordered
+    )
+
+    assert tuple(block.allocated_minutes for block in ordered) == period_capacities
+    assert actual_counts == expected_counts
+    assert sum(actual_counts) == quantity
+    assert all(count >= 1 for count in actual_counts)
+    assert all(block.allocated_amount_text != f"0{unit}" for block in ordered)
+    assert [block.display_title for block in ordered] == [
+        f"{task.title} {count}{unit}" for count in expected_counts
+    ]
 
 
 def test_quantity_less_than_block_count_keeps_all_blocks_title_only():

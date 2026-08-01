@@ -1,3 +1,4 @@
+import logging
 import re
 import uuid
 from dataclasses import dataclass
@@ -16,6 +17,8 @@ from app.models.fixed_schedule import FixedSchedule
 from app.models.plan_block import PlanBlock
 from app.models.planning_cycle import PlanningCycle
 from app.models.task import Task
+
+logger = logging.getLogger(__name__)
 
 _SEOUL_TZ = ZoneInfo("Asia/Seoul")
 
@@ -658,6 +661,14 @@ def _apply_amount_distribution_fallback(
             blocks, key=lambda b: (b.plan_date, _PERIOD_ORDER[b.period], b.display_order)
         )
         total_minutes = sum(b.allocated_minutes for b in ordered_blocks)
+        if total_minutes <= 0:
+            logger.warning(
+                "PlanBlock amount distribution fallback: non-positive total minutes "
+                "task_id=%s block_count=%d",
+                task_id,
+                len(ordered_blocks),
+            )
+            continue
 
         shares = [(quantity * b.allocated_minutes) // total_minutes for b in ordered_blocks]
         remainders = [(quantity * b.allocated_minutes) % total_minutes for b in ordered_blocks]
@@ -666,6 +677,45 @@ def _apply_amount_distribution_fallback(
         priority = sorted(range(len(ordered_blocks)), key=lambda i: (-remainders[i], i))
         for i in priority[:leftover]:
             shares[i] += 1
+
+        # Preserve every already-positive largest-remainder result. Only distributions that
+        # contain a zero are recalculated with one guaranteed unit per block; the remaining
+        # quantity uses the same minute ratio and deterministic remainder tie-break.
+        if any(count == 0 for count in shares):
+            remaining_quantity = quantity - len(ordered_blocks)
+            extra_shares = [
+                (remaining_quantity * b.allocated_minutes) // total_minutes
+                for b in ordered_blocks
+            ]
+            extra_remainders = [
+                (remaining_quantity * b.allocated_minutes) % total_minutes
+                for b in ordered_blocks
+            ]
+            extra_leftover = remaining_quantity - sum(extra_shares)
+            extra_priority = sorted(
+                range(len(ordered_blocks)), key=lambda i: (-extra_remainders[i], i)
+            )
+            for i in extra_priority[:extra_leftover]:
+                extra_shares[i] += 1
+            shares = [1 + count for count in extra_shares]
+
+        valid_distribution = (
+            len(shares) == len(ordered_blocks)
+            and sum(shares) == quantity
+            and all(count >= 1 for count in shares)
+        )
+        if not valid_distribution:
+            logger.warning(
+                "PlanBlock amount distribution fallback: invariant violation "
+                "task_id=%s quantity=%d block_count=%d",
+                task_id,
+                quantity,
+                len(ordered_blocks),
+            )
+            for block in ordered_blocks:
+                block.allocated_amount_text = None
+                block.display_title = _build_fallback_display_title(task)
+            continue
 
         for block, count in zip(ordered_blocks, shares):
             block.allocated_amount_text = f"{count}{unit}"

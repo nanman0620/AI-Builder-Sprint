@@ -455,6 +455,43 @@ def test_single_block_display_title_uses_task_amount_text_when_fully_placed():
     assert blocks[0].display_title == "자료구조 과제 2문제"
 
 
+def test_multi_block_amount_distribution_never_persists_zero_unit():
+    user_id, request, db, session = _setup()
+    task_item = make_task_item(
+        user_id=user_id,
+        solar_request_id=request.id,
+        item_order=1,
+        payload=make_task_payload(
+            title="자료구조 과제",
+            estimated_minutes=240,
+            amount_text="2문제",
+            amount_source="USER",
+        ),
+    )
+    fixed_item = make_fixed_schedule_item(
+        user_id=user_id,
+        solar_request_id=request.id,
+        item_order=2,
+        payload=make_fixed_schedule_payload(
+            start_at_iso=datetime(2026, 7, 29, 10, 30, tzinfo=SEOUL).isoformat(),
+            end_at_iso=datetime(2026, 7, 29, 12, 0, tzinfo=SEOUL).isoformat(),
+        ),
+    )
+    db.seed(task_item, fixed_item)
+
+    with session.begin():
+        svc.execute_new_cycle(session, request)
+
+    blocks = db.all_rows(PlanBlock)
+    assert [block.allocated_minutes for block in blocks] == [30, 210]
+    assert [block.allocated_amount_text for block in blocks] == ["1문제", "1문제"]
+    assert [block.display_title for block in blocks] == [
+        "자료구조 과제 1문제",
+        "자료구조 과제 1문제",
+    ]
+    assert request.status == SolarRequestStatus.COMPLETED
+
+
 # ---------------------------------------------------------------------------
 # 실행 직전/직후 동시성 재확인
 # ---------------------------------------------------------------------------
