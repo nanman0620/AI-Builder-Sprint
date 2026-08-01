@@ -9,6 +9,7 @@ import {
   formatLogicalDateBadge,
   formatPeriodLabel,
   resolveHomeMascotKey,
+  resolveProgressMascotBand,
   resolveScoreBand,
   resolveVisibleHomeState,
   shouldHideTabBar,
@@ -94,6 +95,16 @@ test('점수 구간 경계값이 정확히 나뉜다', () => {
   assert.equal(resolveScoreBand(60), 'SCORE_60');
   assert.equal(resolveScoreBand(99), 'SCORE_60');
   assert.equal(resolveScoreBand(100), 'SCORE_100');
+});
+
+test('홈 진행률 경계값이 0·30·60·100 단계 마스코트에 정확히 매핑된다', () => {
+  assert.equal(resolveProgressMascotBand(0), 'SCORE_00');
+  assert.equal(resolveProgressMascotBand(29), 'SCORE_00');
+  assert.equal(resolveProgressMascotBand(30), 'SCORE_30');
+  assert.equal(resolveProgressMascotBand(59), 'SCORE_30');
+  assert.equal(resolveProgressMascotBand(60), 'SCORE_60');
+  assert.equal(resolveProgressMascotBand(99), 'SCORE_60');
+  assert.equal(resolveProgressMascotBand(100), 'SCORE_100');
 });
 
 test('마스코트 매핑: DEADLINE_WARNING=SAD, NO_ACTIVE_CYCLE=READING, 나머지=DEFAULT', () => {
