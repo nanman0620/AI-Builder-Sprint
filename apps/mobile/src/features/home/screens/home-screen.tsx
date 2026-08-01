@@ -106,16 +106,22 @@ export function HomeScreen() {
           nickname={nickname}
           title="오늘의 계획을 함께 세워볼까요?"
         />
-        <View style={styles.centerBody}>
-          <HomeMascot mascotKey={resolveHomeMascotKey('NO_ACTIVE_CYCLE')} style={styles.centerMascot} />
-          <Text style={styles.bodyHeadline}>아직 오늘 계획이 없어요.</Text>
-          <Text style={styles.bodyDescription}>
-            이음이에게 앞으로 7일의 할 일을 알려주고,{'\n'}오늘의 일정을 시작해 보세요.
-          </Text>
+        <View style={styles.emptyStateGroup}>
+          <View style={styles.centerBody}>
+            <HomeMascot
+              mascotKey={resolveHomeMascotKey('NO_ACTIVE_CYCLE')}
+              size={340}
+              style={styles.centerMascot}
+            />
+            <Text style={styles.bodyHeadline}>아직 오늘 계획이 없어요.</Text>
+            <Text style={styles.bodyDescription}>
+              이음이에게 앞으로 7일의 할 일을 알려주고,{'\n'}오늘의 일정을 시작해 보세요.
+            </Text>
+          </View>
+          <Pressable style={styles.outlineButton} onPress={() => router.push('/(tabs)/plan-management')}>
+            <Text style={styles.outlineButtonText}>계획관리에서 등록하기</Text>
+          </Pressable>
         </View>
-        <Pressable style={styles.outlineButton} onPress={() => router.push('/(tabs)/plan-management')}>
-          <Text style={styles.outlineButtonText}>계획 세우기</Text>
-        </Pressable>
       </View>
     );
   }
@@ -230,6 +236,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.lg,
+  },
+  emptyStateGroup: {
+    flex: 1,
+    transform: [{ translateY: -24 }],
   },
   centerMascot: {
     alignSelf: 'center',

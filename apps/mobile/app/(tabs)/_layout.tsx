@@ -1,14 +1,57 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
+import {
+  Image,
+  StyleSheet,
+  View,
+  type ImageSourcePropType,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
+import {
+  getTabBarStyle,
+  TAB_BAR_ASSET_HEIGHT,
+  TAB_BAR_DIVIDER_HEIGHT,
+  TAB_BAR_DIVIDER_TOP,
+} from '@/src/constants/tab-bar';
 import { colors } from '@/src/constants/tokens';
 import {
-  type ExitDestination,
   PlanExitGuardProvider,
   usePlanExitGuard,
+  type ExitDestination,
 } from '@/src/features/plan-management/contexts/plan-exit-guard-context';
+
+type TabBarVisualProps = {
+  defaultSource: ImageSourcePropType;
+  focused: boolean;
+  selectedSource: ImageSourcePropType;
+};
+
+function TabBarVisual({
+  defaultSource,
+  focused,
+  selectedSource,
+}: TabBarVisualProps) {
+  return (
+    <View style={styles.tabVisual}>
+      <Image
+        accessible={false}
+        resizeMode="contain"
+        source={focused ? selectedSource : defaultSource}
+        style={styles.tabAsset}
+      />
+    </View>
+  );
+}
+
+function TabBarBackground() {
+  return (
+    <View pointerEvents="none" style={styles.tabBarBackground}>
+      <View style={styles.tabBarDivider} />
+    </View>
+  );
+}
 
 function isExitDestination(routeName: string): routeName is Exclude<ExitDestination, 'back'> {
   return routeName === 'calendar' || routeName === 'home' || routeName === 'settings';
@@ -16,6 +59,7 @@ function isExitDestination(routeName: string): routeName is Exclude<ExitDestinat
 
 function GuardedTabs() {
   const { isGuardActive, requestExit } = usePlanExitGuard();
+  const { bottom: bottomInset } = useSafeAreaInsets();
 
   return (
     <Tabs
@@ -33,39 +77,92 @@ function GuardedTabs() {
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textSecondary,
         headerShown: false,
+        tabBarBackground: TabBarBackground,
         tabBarButton: HapticTab,
+        tabBarLabel: () => null,
+        tabBarShowLabel: false,
+        tabBarStyle: getTabBarStyle(bottomInset),
       }}>
       <Tabs.Screen
         name="calendar"
         options={{
           title: '캘린더',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="calendar" color={color} />,
+          tabBarIcon: ({ focused }) => (
+            <TabBarVisual
+              defaultSource={require('@/assets/images/REF-018-tab-calendar-default.png')}
+              focused={focused}
+              selectedSource={require('@/assets/images/REF-019-tab-calendar-selected.png')}
+            />
+          ),
         }}
       />
       <Tabs.Screen
         name="home"
         options={{
           title: '홈',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
+          tabBarIcon: ({ focused }) => (
+            <TabBarVisual
+              defaultSource={require('@/assets/images/REF-023-tab-home-default.png')}
+              focused={focused}
+              selectedSource={require('@/assets/images/REF-024-tab-home-selected.png')}
+            />
+          ),
         }}
       />
       <Tabs.Screen
         name="plan-management"
         options={{
           title: '계획관리',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="doc.text.fill" color={color} />,
+          tabBarIcon: ({ focused }) => (
+            <TabBarVisual
+              defaultSource={require('@/assets/images/REF-006-tab-plan-default.png')}
+              focused={focused}
+              selectedSource={require('@/assets/images/REF-005-tab-plan-selected.png')}
+            />
+          ),
         }}
       />
       <Tabs.Screen
         name="settings"
         options={{
           title: '설정',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="gearshape.fill" color={color} />,
+          tabBarIcon: ({ focused }) => (
+            <TabBarVisual
+              defaultSource={require('@/assets/images/REF-012-tab-settings-default.png')}
+              focused={focused}
+              selectedSource={require('@/assets/images/REF-011-tab-settings-selected.png')}
+            />
+          ),
         }}
       />
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  tabVisual: {
+    width: 76,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tabAsset: {
+    width: 72,
+    height: TAB_BAR_ASSET_HEIGHT,
+  },
+  tabBarBackground: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: 'visible',
+  },
+  tabBarDivider: {
+    position: 'absolute',
+    top: TAB_BAR_DIVIDER_TOP,
+    left: 0,
+    right: 0,
+    height: TAB_BAR_DIVIDER_HEIGHT,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+});
 
 export default function TabLayout() {
   return (

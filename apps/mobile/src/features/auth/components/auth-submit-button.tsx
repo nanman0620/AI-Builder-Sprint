@@ -1,4 +1,4 @@
-import { ActivityIndicator, Pressable, StyleSheet, Text } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, type StyleProp, type ViewStyle } from 'react-native';
 
 import { colors } from '@/src/constants/tokens';
 
@@ -12,14 +12,28 @@ type AuthSubmitButtonProps = {
   onPress: () => void;
   loading?: boolean;
   disabled?: boolean;
+  backgroundColor?: string;
+  style?: StyleProp<ViewStyle>;
 };
 
-export function AuthSubmitButton({ label, onPress, loading = false, disabled = false }: AuthSubmitButtonProps) {
+export function AuthSubmitButton({
+  label,
+  onPress,
+  loading = false,
+  disabled = false,
+  backgroundColor,
+  style,
+}: AuthSubmitButtonProps) {
   const isDisabled = disabled || loading;
 
   return (
     <Pressable
-      style={[styles.button, isDisabled ? styles.buttonDisabled : null]}
+      style={[
+        styles.button,
+        backgroundColor ? { backgroundColor } : null,
+        style,
+        isDisabled ? styles.buttonDisabled : null,
+      ]}
       onPress={onPress}
       disabled={isDisabled}>
       {loading ? <ActivityIndicator color={colors.background} /> : <Text style={styles.buttonText}>{label}</Text>}

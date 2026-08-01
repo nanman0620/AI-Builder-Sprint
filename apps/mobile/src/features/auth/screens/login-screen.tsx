@@ -1,13 +1,14 @@
+import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Alert, Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
 
 import { colors } from '@/src/constants/tokens';
 import { AuthSubmitButton } from '@/src/features/auth/components/auth-submit-button';
 import { AuthTextInput } from '@/src/features/auth/components/auth-text-input';
 import { KakaoLoginButton } from '@/src/features/auth/components/kakao-login-button';
-import { toLoginErrorMessage, AUTH_NETWORK_ERROR_MESSAGE } from '@/src/features/auth/errors';
+import { AUTH_NETWORK_ERROR_MESSAGE, toLoginErrorMessage } from '@/src/features/auth/errors';
 import { signInWithEmail, signInWithKakao } from '@/src/features/auth/services/auth-service';
 import { validateEmail, validateLoginPassword } from '@/src/features/auth/validation';
 
@@ -108,12 +109,16 @@ export function LoginScreen() {
           <View style={styles.frame}>
             {/* UI-002 상단의 보라색 곡선 히어로 배경.
                 가운데가 깊고 양끝으로 갈수록 얕아지는 곡선을 재현하기 위해,
-                화면보다 훨씬 큰 원(지름 1040)의 아랫부분만 보이도록 배치한다.
-                expo-linear-gradient가 없어 그라디언트 대신 단색으로 근사한다. */}
+                화면보다 훨씬 큰 원(지름 1040)의 아랫부분만 보이도록 배치한다. */}
             <View style={styles.hero}>
-              <View style={styles.heroCircle} />
+              <LinearGradient
+                colors={['#F0D5FF', '#D791FF']}
+                start={{ x: 0.5, y: 0 }}
+                end={{ x: 0.5, y: 1 }}
+                style={styles.heroCircle}
+              />
               <Image
-                source={require('@/assets/brand/mascot-default.png')}
+                source={require('@/assets/brand/mascot-purple.png')}
                 style={styles.mascot}
                 resizeMode="contain"
               />
@@ -135,6 +140,7 @@ export function LoginScreen() {
                 onChangeText={handleChangeEmail}
                 error={emailError}
                 editable={!isSubmitting}
+                containerStyle={styles.emailInputContainer}
               />
 
               <AuthTextInput
@@ -144,6 +150,7 @@ export function LoginScreen() {
                 onChangeText={handleChangePassword}
                 error={passwordError ?? authError}
                 editable={!isSubmitting}
+                containerStyle={styles.passwordInputContainer}
               />
 
               <View style={styles.linkRow}>
@@ -155,7 +162,12 @@ export function LoginScreen() {
                 </Text>
               </View>
 
-              <AuthSubmitButton label="이메일로 로그인" onPress={handleSubmit} loading={isSubmitting} />
+              <AuthSubmitButton
+                label="이메일로 로그인"
+                onPress={handleSubmit}
+                loading={isSubmitting}
+                backgroundColor={colors.primary}
+              />
 
               <View style={styles.dividerRow}>
                 <View style={styles.dividerLine} />
@@ -176,18 +188,17 @@ export function LoginScreen() {
 
 const CONTENT_MAX_WIDTH = 400;
 const HALF_WIDTH = CONTENT_MAX_WIDTH / 2;
-// UI-002의 그라디언트(연보라 -> 보라)를 단색으로 근사한 값.
-const HERO_BACKGROUND = '#C9A6F5';
-const HERO_HEIGHT = 190;
+const HERO_HEIGHT = 206;
 // 화면 중앙에서 가장 깊고(위 값과 동일) 좌우 끝에서 가장 얕은(EDGE_DEPTH) 완만한 곡선.
-const EDGE_DEPTH = 150;
+const EDGE_DEPTH = 166;
 const SAG = HERO_HEIGHT - EDGE_DEPTH;
 const CIRCLE_RADIUS = (HALF_WIDTH * HALF_WIDTH + SAG * SAG) / (2 * SAG);
 const CIRCLE_DIAMETER = CIRCLE_RADIUS * 2;
 const CIRCLE_LEFT = HALF_WIDTH - CIRCLE_RADIUS;
 const CIRCLE_TOP = HERO_HEIGHT - CIRCLE_RADIUS - CIRCLE_RADIUS;
-const MASCOT_WIDTH = 80;
+const MASCOT_WIDTH = 160;
 const MASCOT_HEIGHT = Math.round((MASCOT_WIDTH * 534) / 711);
+const MASCOT_BOTTOM_GAP = 16;
 
 const styles = StyleSheet.create({
   safeArea: {
@@ -220,17 +231,18 @@ const styles = StyleSheet.create({
     width: CIRCLE_DIAMETER,
     height: CIRCLE_DIAMETER,
     borderRadius: CIRCLE_RADIUS,
-    backgroundColor: HERO_BACKGROUND,
     zIndex: 0,
   },
   mascot: {
+    position: 'absolute',
+    bottom: MASCOT_BOTTOM_GAP,
     width: MASCOT_WIDTH,
     height: MASCOT_HEIGHT,
     zIndex: 1,
   },
   formArea: {
     paddingHorizontal: 20,
-    paddingTop: 20,
+    paddingTop: 26,
     paddingBottom: 24,
   },
   heading: {
@@ -239,21 +251,29 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.text,
     textAlign: 'center',
-    marginBottom: 16,
+    marginBottom: 22,
   },
   headingHighlight: {
     color: colors.primary,
   },
   title: {
+    width: '100%',
     fontSize: 15,
     fontWeight: '700',
     color: colors.text,
-    marginBottom: 10,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  emailInputContainer: {
+    marginBottom: 20,
+  },
+  passwordInputContainer: {
+    marginBottom: 22,
   },
   linkRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 16,
+    marginBottom: 22,
   },
   link: {
     fontSize: 12,
@@ -263,8 +283,8 @@ const styles = StyleSheet.create({
   dividerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 16,
-    marginBottom: 16,
+    marginTop: 24,
+    marginBottom: 22,
   },
   dividerLine: {
     flex: 1,

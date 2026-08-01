@@ -1,10 +1,12 @@
 import { useFocusEffect, useNavigation, usePreventRemove } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { BackHandler } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ErrorView } from '@/src/components/common/error-view';
 import { LoadingView } from '@/src/components/common/loading-view';
+import { getTabBarStyle } from '@/src/constants/tab-bar';
 
 import { ChangeConfirmationScreen } from '../components/change-confirmation-screen';
 import { ChangeInputScreen } from '../components/change-input-screen';
@@ -33,6 +35,9 @@ const ACTIVE_CYCLE_EXAMPLES = [
 export function PlanManagementScreen() {
   const router = useRouter();
   const navigation = useNavigation();
+  const { bottom: bottomInset } = useSafeAreaInsets();
+  const visibleTabBarStyle = useMemo(() => getTabBarStyle(bottomInset), [bottomInset]);
+  const hiddenTabBarStyle = useMemo(() => getTabBarStyle(bottomInset, true), [bottomInset]);
   const allowResultExitRef = useRef(false);
   const {
     isGuardActive,
@@ -80,12 +85,12 @@ export function PlanManagementScreen() {
   useFocusEffect(
     useCallback(() => {
       navigation.setOptions({
-        tabBarStyle: isBlockingResult ? { display: 'none' } : undefined,
+        tabBarStyle: isBlockingResult ? hiddenTabBarStyle : visibleTabBarStyle,
       });
       return () => {
-        navigation.setOptions({ tabBarStyle: undefined });
+        navigation.setOptions({ tabBarStyle: visibleTabBarStyle });
       };
-    }, [isBlockingResult, navigation])
+    }, [hiddenTabBarStyle, isBlockingResult, navigation, visibleTabBarStyle])
   );
 
   useEffect(() => {

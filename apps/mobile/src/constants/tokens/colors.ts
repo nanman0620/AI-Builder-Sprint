@@ -5,7 +5,7 @@ export const colors = {
   surface: '#FFFFFF',
   text: '#111827',
   textSecondary: '#6B7280',
-  primary: '#A855F7',
+  primary: '#CB72FF',
   error: '#EF4444',
   border: '#E5E7EB',
   // 완료된 PlanBlock 카드, 진행률 게이지 트랙, 프로필 아바타 배경 등에서 반복되는 옅은 보라 표면 (UI-007, UI-011, UI-027)

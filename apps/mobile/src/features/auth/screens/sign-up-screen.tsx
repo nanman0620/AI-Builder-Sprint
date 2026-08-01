@@ -1,13 +1,13 @@
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
 
 import { colors } from '@/src/constants/tokens';
 import { AuthMaterialIcon } from '@/src/features/auth/components/auth-material-icon';
 import { AuthSubmitButton } from '@/src/features/auth/components/auth-submit-button';
 import { AuthTextInput } from '@/src/features/auth/components/auth-text-input';
-import { toSignUpErrorMessage, AUTH_NETWORK_ERROR_MESSAGE } from '@/src/features/auth/errors';
+import { AUTH_NETWORK_ERROR_MESSAGE, toSignUpErrorMessage } from '@/src/features/auth/errors';
 import { signUpWithEmail } from '@/src/features/auth/services/auth-service';
 import {
   MIN_PASSWORD_LENGTH,
@@ -160,6 +160,7 @@ export function SignUpScreen() {
               onChangeText={handleChangeEmail}
               error={emailError}
               editable={!isSubmitting}
+              containerStyle={styles.inputGroup}
             />
 
             <AuthTextInput
@@ -170,6 +171,7 @@ export function SignUpScreen() {
               onChangeText={handleChangePassword}
               error={passwordError}
               editable={!isSubmitting}
+              containerStyle={styles.inputGroup}
             />
 
             <AuthTextInput
@@ -180,21 +182,33 @@ export function SignUpScreen() {
               onChangeText={handleChangePasswordConfirm}
               error={passwordConfirmError}
               editable={!isSubmitting}
+              containerStyle={styles.lastInputGroup}
             />
 
-            <Pressable style={styles.termsRow} onPress={handleToggleTerms} disabled={isSubmitting}>
-              <AuthMaterialIcon
-                name={agreedToTerms ? 'check-box' : 'check-box-outline-blank'}
-                size={20}
-                color={agreedToTerms ? colors.primary : colors.textSecondary}
-              />
-              <Text style={styles.termsText}>서비스 이용 약관에 동의합니다.</Text>
+            <Pressable
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: agreedToTerms }}
+              style={styles.termsRow}
+              onPress={handleToggleTerms}
+              disabled={isSubmitting}>
+              <View style={[styles.checkbox, agreedToTerms ? styles.checkboxChecked : null]}>
+                {agreedToTerms ? <AuthMaterialIcon name="check" size={20} color={colors.text} /> : null}
+              </View>
+              <Text numberOfLines={1} style={styles.termsText}>
+                서비스 이용 약관에 동의합니다.
+              </Text>
             </Pressable>
             {termsError ? <Text style={styles.termsErrorText}>{termsError}</Text> : null}
 
             {formError ? <Text style={styles.formErrorText}>{formError}</Text> : null}
 
-            <AuthSubmitButton label="가입하기" onPress={handleSubmit} loading={isSubmitting} />
+            <AuthSubmitButton
+              label="가입하기"
+              onPress={handleSubmit}
+              loading={isSubmitting}
+              backgroundColor={colors.primary}
+              style={styles.submitButton}
+            />
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -229,7 +243,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 16,
+    marginBottom: 48,
   },
   headerTitle: {
     fontSize: 16,
@@ -243,13 +257,31 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     width: LOGO_WIDTH,
     height: LOGO_HEIGHT,
-    marginBottom: 16,
+    marginBottom: 40,
+  },
+  inputGroup: {
+    marginBottom: 40,
+  },
+  lastInputGroup: {
+    marginBottom: 0,
   },
   termsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 8,
-    marginBottom: 14,
+    marginTop: 55,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderWidth: 2,
+    borderColor: '#8E8E93',
+    borderRadius: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxChecked: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary,
   },
   termsText: {
     fontSize: 13,
@@ -259,12 +291,15 @@ const styles = StyleSheet.create({
   termsErrorText: {
     fontSize: 12,
     color: colors.error,
-    marginBottom: 12,
+    marginTop: 4,
   },
   formErrorText: {
     fontSize: 12,
     color: colors.error,
-    marginBottom: 12,
+    marginTop: 4,
     textAlign: 'center',
+  },
+  submitButton: {
+    marginTop: 18,
   },
 });
