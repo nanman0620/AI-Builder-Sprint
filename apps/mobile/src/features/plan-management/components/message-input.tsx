@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { PLAN_COMPOSER_BOTTOM_OFFSET } from '@/src/constants/tab-bar';
-import { colors, spacing } from '@/src/constants/tokens';
+import { colors, fonts, spacing } from '@/src/constants/tokens';
 
 type MessageInputProps = {
   value: string;
@@ -47,9 +47,9 @@ export function MessageInput({
 const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'center',
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.xs,
     gap: spacing.sm,
     borderTopWidth: 1,
     borderTopColor: colors.border,
@@ -60,11 +60,15 @@ const styles = StyleSheet.create({
     flex: 1,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 24,
+    borderRadius: 20,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingVertical: 6,
+    minHeight: 40,
     maxHeight: 120,
     color: colors.text,
+    fontFamily: fonts.regular,
+    fontSize: 14,
+    lineHeight: 18,
   },
   sendButton: {
     width: 40,
