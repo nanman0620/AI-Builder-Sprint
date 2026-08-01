@@ -1,5 +1,6 @@
 import { apiRequest } from '@/src/services/api/client';
 
+import { normalizeExecutionStatusResponse, normalizePlanManagementState } from '../logic';
 import type {
   AcknowledgeExecutionResultResponse,
   DecisionOption,
@@ -15,15 +16,17 @@ type CreateSolarRequestBody = {
   message: string;
 };
 
-export function createSolarRequest(body: CreateSolarRequestBody): Promise<PlanManagementState> {
-  return apiRequest<PlanManagementState>('/solar/requests', { method: 'POST', body });
+export async function createSolarRequest(body: CreateSolarRequestBody): Promise<PlanManagementState> {
+  const result = await apiRequest<PlanManagementState>('/solar/requests', { method: 'POST', body });
+  return normalizePlanManagementState(result);
 }
 
 // GET /plan-management/state가 이미 request 전체를 포함해 반환하므로, 이 함수는 상태 복원에
 // 실제로 필요한 경우(예: 딥링크로 특정 요청에 바로 진입)에만 별도로 호출한다.
 // 탭 포커스 시 일반 상태 로딩(usePlanManagement의 load)에서는 호출하지 않는다.
-export function getSolarRequestDetail(requestId: string): Promise<PlanManagementState> {
-  return apiRequest<PlanManagementState>(`/solar/requests/${requestId}`);
+export async function getSolarRequestDetail(requestId: string): Promise<PlanManagementState> {
+  const result = await apiRequest<PlanManagementState>(`/solar/requests/${requestId}`);
+  return normalizePlanManagementState(result);
 }
 
 type SendSolarMessageBody = {
@@ -31,14 +34,15 @@ type SendSolarMessageBody = {
   message: string;
 };
 
-export function sendSolarMessage(
+export async function sendSolarMessage(
   requestId: string,
   body: SendSolarMessageBody
 ): Promise<PlanManagementState> {
-  return apiRequest<PlanManagementState>(`/solar/requests/${requestId}/messages`, {
+  const result = await apiRequest<PlanManagementState>(`/solar/requests/${requestId}/messages`, {
     method: 'POST',
     body,
   });
+  return normalizePlanManagementState(result);
 }
 
 type SubmitSolarDecisionBody = {
@@ -46,20 +50,22 @@ type SubmitSolarDecisionBody = {
   decision: DecisionOption['value'];
 };
 
-export function submitSolarDecision(
+export async function submitSolarDecision(
   requestId: string,
   body: SubmitSolarDecisionBody
 ): Promise<PlanManagementState> {
-  return apiRequest<PlanManagementState>(`/solar/requests/${requestId}/decisions`, {
+  const result = await apiRequest<PlanManagementState>(`/solar/requests/${requestId}/decisions`, {
     method: 'POST',
     body,
   });
+  return normalizePlanManagementState(result);
 }
 
-export function reopenSolarRequest(requestId: string): Promise<PlanManagementState> {
-  return apiRequest<PlanManagementState>(`/solar/requests/${requestId}/reopen`, {
+export async function reopenSolarRequest(requestId: string): Promise<PlanManagementState> {
+  const result = await apiRequest<PlanManagementState>(`/solar/requests/${requestId}/reopen`, {
     method: 'POST',
   });
+  return normalizePlanManagementState(result);
 }
 
 export function executeSolarRequest(requestId: string): Promise<ExecutionStartResponse> {
@@ -68,8 +74,9 @@ export function executeSolarRequest(requestId: string): Promise<ExecutionStartRe
   });
 }
 
-export function getSolarRequestExecution(requestId: string): Promise<ExecutionStatusResponse> {
-  return apiRequest<ExecutionStatusResponse>(`/solar/requests/${requestId}/execution`);
+export async function getSolarRequestExecution(requestId: string): Promise<ExecutionStatusResponse> {
+  const result = await apiRequest<ExecutionStatusResponse>(`/solar/requests/${requestId}/execution`);
+  return normalizeExecutionStatusResponse(result);
 }
 
 export function retrySolarRequest(requestId: string): Promise<ExecutionStartResponse> {

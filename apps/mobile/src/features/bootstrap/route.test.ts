@@ -3,7 +3,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { resolveAppRoute, resolveInitialRoute, type BootstrapSyncResult } from './route';
+import {
+  resolveAppRoute,
+  resolveInitialRoute,
+  resolveSessionGate,
+  type BootstrapSyncResult,
+} from './route';
 import type { BootstrapResponse } from './types';
 
 function makeBootstrap(overrides: Partial<BootstrapResponse> = {}): BootstrapResponse {
@@ -86,4 +91,16 @@ test('resolveAppRoute는 success 결과를 resolveInitialRoute에 위임한다',
   const bootstrap = makeBootstrap({ initialScreen: 'NO_PLANS' });
   const result: BootstrapSyncResult = { type: 'success', data: bootstrap };
   assert.deepEqual(resolveAppRoute(result), { type: 'route', href: '/(tabs)/home' });
+});
+
+test('resolveSessionGate: session 복원 전(null) → bootstrap 미호출', () => {
+  assert.deepEqual(resolveSessionGate(null), { type: 'no-session' });
+});
+
+test('resolveSessionGate: session 복원 후 → 그 access_token으로 bootstrap 호출', () => {
+  const session = { access_token: 'token-abc' };
+  assert.deepEqual(resolveSessionGate(session), {
+    type: 'call-bootstrap',
+    accessToken: 'token-abc',
+  });
 });

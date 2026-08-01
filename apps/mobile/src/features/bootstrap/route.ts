@@ -30,6 +30,21 @@ const HOME_INITIAL_SCREENS = new Set<string>([
   'IN_PROGRESS',
 ]);
 
+// getSession() 결과 하나를 bootstrap 호출 여부·사용할 token으로 변환하는 순수 함수.
+// session이 아직 복원되지 않았거나 없으면(null) 절대 GET /bootstrap을 호출하지 않는다 — 이
+// 검사와 실제 호출 사이에 session을 다시 조회하지 않으므로 두 조회 결과가 서로 달라 인증 헤더
+// 없이 요청이 나가는 경우가 없다.
+export type SessionGateResult =
+  | { type: 'no-session' }
+  | { type: 'call-bootstrap'; accessToken: string };
+
+export function resolveSessionGate(session: { access_token: string } | null): SessionGateResult {
+  if (!session) {
+    return { type: 'no-session' };
+  }
+  return { type: 'call-bootstrap', accessToken: session.access_token };
+}
+
 export type AppRouteHref = '/(auth)/login' | '/(auth)/onboarding' | '/(tabs)/plan-management' | '/(tabs)/home';
 
 export type AppRouteDecision =
