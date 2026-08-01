@@ -11,11 +11,10 @@ import {
 
 import { colors, spacing, typography } from '@/src/constants/tokens';
 
-import { getVisibleConversationMessages } from '../logic';
+import { buildConversationTimeline } from '../logic';
 import type { SolarRequest } from '../types';
-import { ChatMessageBubble } from './chat-message-bubble';
+import { ConversationTimeline } from './conversation-timeline';
 import { MessageInput } from './message-input';
-import { RequestItemCard } from './request-item-card';
 
 type CollectingScreenProps = {
   request: SolarRequest;
@@ -35,12 +34,11 @@ export function CollectingScreen({ request, isSubmitting, actionError, onSendMes
   const [value, setValue] = useState('');
   const scrollViewRef = useRef<ScrollView>(null);
 
-  const sortedItems = [...request.requestItems].sort((a, b) => a.itemOrder - b.itemOrder);
-  const sortedMessages = getVisibleConversationMessages(request);
+  const timeline = buildConversationTimeline(request);
 
   useEffect(() => {
     scrollViewRef.current?.scrollToEnd({ animated: true });
-  }, [sortedMessages.length, sortedItems.length]);
+  }, [timeline.length]);
 
   const handleSubmit = () => {
     const trimmed = value.trim();
@@ -55,16 +53,8 @@ export function CollectingScreen({ request, isSubmitting, actionError, onSendMes
         ref={scrollViewRef}
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled">
-        {sortedItems.map((item) => (
-          <RequestItemCard key={item.id} item={item} highlighted={item.id === request.pendingItemId} />
-        ))}
-        {sortedItems.length > 0 && (
-          <Text style={styles.guidance}>모호한 항목은 따로 질문하고 나머지는 이대로 확정해요.</Text>
-        )}
         <View style={styles.messages}>
-          {sortedMessages.map((message) => (
-            <ChatMessageBubble key={message.id} message={message} />
-          ))}
+          <ConversationTimeline entries={timeline} />
           {isSubmitting && (
             <View style={styles.typingRow}>
               <ActivityIndicator size="small" color={colors.primary} />
@@ -92,11 +82,6 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: spacing.lg,
-  },
-  guidance: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    marginBottom: spacing.lg,
   },
   messages: {
     gap: spacing.sm,

@@ -228,6 +228,85 @@ def test_change_input_invalid_fixed_schedule_becomes_missing_end_question():
     assert pending["field"] == "endAt"
 
 
+def test_snapshot_metadata_orders_items_and_uses_persistent_server_ids():
+    second = _make_item(item_order=2, action="CREATE", status="READY")
+    first = _make_item(
+        item_order=1,
+        action="CREATE",
+        status="INFO_MISSING",
+        missing_fields=["amount"],
+    )
+
+    metadata = solar_request_service._build_request_item_snapshot_metadata([second, first])
+
+    assert metadata["snapshotVersion"] == 1
+    snapshots = metadata["requestItemSnapshots"]
+    assert [snapshot["itemOrder"] for snapshot in snapshots] == [1, 2]
+    assert snapshots[0]["status"] == "INFO_MISSING"
+    assert snapshots[0]["missingFields"] == ["amount"]
+    assert uuid.UUID(snapshots[0]["snapshotId"])
+    assert snapshots[0]["snapshotId"] != snapshots[1]["snapshotId"]
+
+
+def test_snapshot_change_fingerprint_ignores_renumber_but_detects_display_change():
+    item = _make_item(item_order=2, action="CREATE", status="READY")
+    from app.services import plan_management_service
+
+    before = solar_request_service._snapshot_change_fingerprint(
+        item, plan_management_service=plan_management_service
+    )
+    item.item_order = 1
+    assert solar_request_service._snapshot_change_fingerprint(
+        item, plan_management_service=plan_management_service
+    ) == before
+
+    item.normalized_payload = {**item.normalized_payload, "amountText": "40개"}
+    assert solar_request_service._snapshot_change_fingerprint(
+        item, plan_management_service=plan_management_service
+    ) != before
+
+
+def test_changed_snapshot_items_only_returns_new_or_display_changed_items():
+    from app.services import plan_management_service
+
+    updated = _make_item(
+        item_order=1,
+        action="UPDATE",
+        status="READY",
+        normalized_payload={
+            "title": "영단어 암기", "deadlineAt": None, "estimatedMinutes": 20,
+            "estimatedMinutesSource": "USER", "remainingMinutes": 20,
+            "amountText": "20개", "amountSource": "USER",
+        },
+    )
+    unchanged = _make_item(item_order=2, action="CREATE", status="READY")
+    before = {
+        item.id: solar_request_service._snapshot_change_fingerprint(
+            item, plan_management_service=plan_management_service
+        )
+        for item in [updated, unchanged]
+    }
+    old_snapshot = solar_request_service._build_request_item_snapshot_metadata([updated])[
+        "requestItemSnapshots"
+    ][0]
+
+    updated.normalized_payload = {**updated.normalized_payload, "amountText": "40개"}
+    added = _make_item(item_order=3, action="DELETE", status="READY")
+    changed = solar_request_service._find_changed_snapshot_items(
+        [updated, unchanged, added], before, plan_management_service=plan_management_service
+    )
+    new_snapshots = solar_request_service._build_request_item_snapshot_metadata(changed)[
+        "requestItemSnapshots"
+    ]
+
+    assert changed == [updated, added]
+    assert old_snapshot["summaryText"] == "준비됨 · 20개 · 20분"
+    assert new_snapshots[0]["summaryText"] == "준비됨 · 40개 · 20분"
+    assert old_snapshot["snapshotId"] != new_snapshots[0]["snapshotId"]
+    assert new_snapshots[1]["action"] == "DELETE"
+    assert new_snapshots[1]["summaryText"] == "삭제 예정"
+
+
 # ---------------------------------------------------------------------------
 # _ensure_pending_question
 # ---------------------------------------------------------------------------

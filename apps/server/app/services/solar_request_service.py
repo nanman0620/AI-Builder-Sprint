@@ -412,6 +412,12 @@ def _persist_analysis(
         created_db_items.append(db_item)
     db.flush()
 
+    from app.services import plan_management_service
+
+    initial_snapshot_metadata = _build_request_item_snapshot_metadata(
+        created_db_items, plan_management_service=plan_management_service
+    )
+
     db.add(
         SolarMessage(
             id=uuid.uuid4(),
@@ -435,7 +441,7 @@ def _persist_analysis(
             role=SolarMessageRole.ASSISTANT,
             kind=SolarMessageKind.TEXT,
             content=analysis.analysis_message,
-            message_metadata={},
+            message_metadata=initial_snapshot_metadata,
         )
     )
     next_seq = 3
@@ -662,6 +668,39 @@ def _persist_ordered_messages(
         )
         next_seq += 1
     db.flush()
+
+
+def _build_request_item_snapshot_metadata(
+    items: list[SolarRequestItem], *, plan_management_service=None
+) -> dict:
+    if not items:
+        return {}
+    if plan_management_service is None:
+        from app.services import plan_management_service as display_service
+    else:
+        display_service = plan_management_service
+    snapshots = []
+    for item in sorted(items, key=lambda value: value.item_order):
+        snapshot = display_service.build_request_item_snapshot_value(item)
+        snapshots.append({"snapshotId": str(uuid.uuid4()), **snapshot})
+    return {"snapshotVersion": 1, "requestItemSnapshots": snapshots}
+
+
+def _snapshot_change_fingerprint(item: SolarRequestItem, *, plan_management_service) -> dict:
+    value = plan_management_service.build_request_item_snapshot_value(item)
+    # itemOrder 재번호만으로 변경 snapshot을 만들지 않는다. 실제 카드 표시값 변경만 추적한다.
+    return {key: field for key, field in value.items() if key != "itemOrder"}
+
+
+def _find_changed_snapshot_items(
+    items: list[SolarRequestItem], before_values: dict[uuid.UUID, dict], *, plan_management_service
+) -> list[SolarRequestItem]:
+    return [
+        item
+        for item in items
+        if before_values.get(item.id)
+        != _snapshot_change_fingerprint(item, plan_management_service=plan_management_service)
+    ]
 
 
 def _find_item_by_id(item_id: str, items: list[SolarRequestItem]) -> SolarRequestItem | None:
@@ -1669,7 +1708,16 @@ def add_solar_message(
         if dispatch_now.kind != dispatch.kind:
             raise ApiError(409, CODE_INVALID_REQUEST_STATE, "요청 상태가 바뀌었어요. 다시 시도해 주세요.")
 
-        entries = [_user_text_entry(canonical_client_event_id, canonical_message), _assistant_text_entry(result.analysis_message)]
+        from app.services import plan_management_service
+
+        before_item_values = {
+            item.id: _snapshot_change_fingerprint(
+                item, plan_management_service=plan_management_service
+            )
+            for item in items
+        }
+        analysis_entry = _assistant_text_entry(result.analysis_message)
+        entries = [_user_text_entry(canonical_client_event_id, canonical_message), analysis_entry]
 
         if dispatch.kind == "CARD":
             field = call_ctx["field"]
@@ -1782,9 +1830,14 @@ def add_solar_message(
                 elif kind == SolarMessageKind.TEXT.value:
                     entries.append(_assistant_text_entry(content))
 
-        _persist_ordered_messages(db, user_id=user_id, request=request, entries=entries)
+        changed_items = _find_changed_snapshot_items(
+            items, before_item_values, plan_management_service=plan_management_service
+        )
+        analysis_entry["message_metadata"] = _build_request_item_snapshot_metadata(
+            changed_items, plan_management_service=plan_management_service
+        )
 
-        from app.services import plan_management_service
+        _persist_ordered_messages(db, user_id=user_id, request=request, entries=entries)
 
         return plan_management_service.get_solar_request_detail_state(db, user_id, request.id)
 

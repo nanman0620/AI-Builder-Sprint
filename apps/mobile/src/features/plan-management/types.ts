@@ -105,6 +105,32 @@ export type ChatMessage = {
   metadata: Record<string, unknown>;
 };
 
+export type RequestItemSnapshot = {
+  snapshotId: string;
+  requestItemId: string;
+  itemOrder: number;
+  action: ItemAction;
+  actionLabel: string;
+  entityType: ItemEntityType;
+  entityLabel: string;
+  status: ItemStatus;
+  statusLabel: string;
+  title: string;
+  summaryText: string;
+  missingFields: string[];
+};
+
+export type RequestItemSnapshotMetadata = {
+  snapshotVersion: 1;
+  requestItemSnapshots: RequestItemSnapshot[];
+};
+
+export type ConversationTimelineEntry =
+  | { type: 'MESSAGE'; id: string; message: ChatMessage }
+  | { type: 'REQUEST_ITEM_SNAPSHOT'; id: string; snapshot: RequestItemSnapshot }
+  | { type: 'LEGACY_CURRENT_REQUEST_ITEM'; id: string; item: SolarRequestItem }
+  | { type: 'DECISION_PROMPT'; id: string; message: string };
+
 export type ItemAction = 'CREATE' | 'UPDATE' | 'DELETE';
 export type ItemEntityType = 'TASK' | 'FIXED_SCHEDULE';
 export type ItemStatus = 'INFO_MISSING' | 'READY' | 'EXECUTED';
