@@ -1,4 +1,8 @@
-"""execute_new_cycle()/DefaultExecutor 통합 테스트 전용 in-memory fake DB.
+"""execute_new_cycle()/execute_active_cycle()/DefaultExecutor 통합 테스트 전용 in-memory
+fake DB. support_active_cycle_execution.py가 이 모듈의 FakeNewCycleDB/FakeNewCycleSession을
+그대로 재사용한다(이름은 NEW_CYCLE 전용처럼 보이지만, 실제로는 특정 purpose에 종속되지 않는
+범용 ORM 흉내 세션이다) — 두 실행 서비스가 완전히 같은 "여러 세션이 커밋된 데이터를 공유"·
+"실패 시 롤백" 요구를 가지므로 fake 인프라를 중복 작성하지 않는다.
 
 support_scheduler.py/support_settlement.py와 같은 계열이지만, `_execute_locked`가 요구하는
 "세션 여러 개가 같은 커밋된 데이터를 공유"와 "실패 시 이번 트랜잭션에서 만든 변경만 정확히
@@ -19,9 +23,8 @@ import uuid
 from datetime import datetime
 from types import SimpleNamespace
 
-from sqlalchemy.sql import operators
 from sqlalchemy.sql.dml import Update
-from sqlalchemy.sql.elements import BindParameter, BooleanClauseList, Null, TextClause
+from sqlalchemy.sql.elements import BindParameter, Null, TextClause
 
 from app.models.enums import (
     SolarAction,
@@ -30,50 +33,19 @@ from app.models.enums import (
     SolarRequestPurpose,
     SolarRequestStatus,
 )
+from app.models.check_in import CheckIn
 from app.models.fixed_schedule import FixedSchedule
 from app.models.plan_block import PlanBlock
 from app.models.planning_cycle import PlanningCycle
 from app.models.solar_request import SolarRequest
 from app.models.solar_request_item import SolarRequestItem
 from app.models.task import Task
+from tests.support_sql_eval import eval_clause as _eval_clause
 
 _TABLENAME_TO_MODEL = {
     model.__tablename__: model
-    for model in (SolarRequest, SolarRequestItem, Task, FixedSchedule, PlanningCycle, PlanBlock)
+    for model in (SolarRequest, SolarRequestItem, Task, FixedSchedule, PlanningCycle, PlanBlock, CheckIn)
 }
-
-
-def _resolve_operand(side, obj):
-    if isinstance(side, BindParameter):
-        return side.value
-    if isinstance(side, Null):
-        return None
-    key = getattr(side, "key", None)
-    if key is not None and hasattr(obj, key):
-        return getattr(obj, key)
-    raise AssertionError(f"FakeNewCycleDB가 처리할 수 없는 조건식입니다: {side!r}")
-
-
-def _eval_clause(clause, obj) -> bool:
-    if isinstance(clause, BooleanClauseList):
-        results = [_eval_clause(sub, obj) for sub in clause.clauses]
-        operator_name = getattr(clause.operator, "__name__", "")
-        if operator_name == "and_":
-            return all(results)
-        if operator_name == "or_":
-            return any(results)
-        raise AssertionError(f"지원하지 않는 불리언 연산자입니다: {clause.operator}")
-    left = _resolve_operand(clause.left, obj)
-    right = _resolve_operand(clause.right, obj)
-    if clause.operator is operators.in_op:
-        return left in right
-    if clause.operator is operators.not_in_op:
-        return left not in right
-    if clause.operator is operators.is_:
-        return left is right
-    if clause.operator is operators.is_not:
-        return left is not right
-    return bool(clause.operator(left, right))
 
 
 def _apply_update_values(rows: list, stmt: Update) -> list:
