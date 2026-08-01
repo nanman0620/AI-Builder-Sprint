@@ -121,6 +121,9 @@ function getQuestionTarget(message: SolarRequest['messages'][number]) {
     message.role !== 'ASSISTANT' ||
     message.kind !== 'QUESTION' ||
     message.metadata.promptType === CHANGE_CONFIRMATION_PROMPT_TYPE ||
+    message.metadata.followUpType === 'CHANGE_DETAILS' ||
+    message.metadata.followUpType === 'UNSUPPORTED_TASK_RECURRENCE' ||
+    message.metadata.unresolved === true ||
     typeof itemId !== 'string' ||
     !itemId.trim() ||
     typeof field !== 'string' ||
@@ -159,7 +162,15 @@ export function buildConversationTimeline(request: SolarRequest): ConversationTi
     : [];
   const legacyItemsById = new Map(legacyItems.map((item) => [item.id, item]));
   const legacyActiveQuestionId = findLegacyActiveQuestionId(messages);
+  const nextEligibleQuestionItemIdAfterIndex: (string | null)[] = Array(messages.length).fill(null);
+  let nextEligibleQuestionItemId: string | null = null;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    nextEligibleQuestionItemIdAfterIndex[index] = nextEligibleQuestionItemId;
+    const target = getQuestionTarget(messages[index]);
+    if (target) nextEligibleQuestionItemId = target.itemId;
+  }
   let legacyItemsAdded = false;
+  let activeQuestionSessionItemId: string | null = null;
 
   const addLegacyItems = () => {
     if (legacyItemsAdded) return;
@@ -173,7 +184,7 @@ export function buildConversationTimeline(request: SolarRequest): ConversationTi
     legacyItemsAdded = true;
   };
 
-  for (const message of messages) {
+  for (const [messageIndex, message] of messages.entries()) {
     const target = getQuestionTarget(message);
     if (!target) {
       entries.push({ type: 'MESSAGE', id: `message:${message.id}`, message });
@@ -182,18 +193,31 @@ export function buildConversationTimeline(request: SolarRequest): ConversationTi
       if (seenSnapshotIds.has(snapshot.snapshotId)) continue;
       seenSnapshotIds.add(snapshot.snapshotId);
       latestSnapshotsByItemId.set(snapshot.requestItemId, snapshot);
-      entries.push({
-        type: 'REQUEST_ITEM_SNAPSHOT',
-        id: `snapshot:${snapshot.snapshotId}`,
-        snapshot,
-      });
+      const isIntermediateSnapshot =
+        snapshot.status === 'INFO_MISSING' &&
+        activeQuestionSessionItemId === snapshot.requestItemId &&
+        nextEligibleQuestionItemIdAfterIndex[messageIndex] === snapshot.requestItemId;
+      if (!isIntermediateSnapshot) {
+        entries.push({
+          type: 'REQUEST_ITEM_SNAPSHOT',
+          id: `snapshot:${snapshot.snapshotId}`,
+          snapshot,
+        });
+      }
+      if (
+        snapshot.status === 'READY' &&
+        activeQuestionSessionItemId === snapshot.requestItemId
+      ) {
+        activeQuestionSessionItemId = null;
+      }
     }
     if (target) {
       if (message.id === legacyActiveQuestionId) addLegacyItems();
       const snapshotTitle = latestSnapshotsByItemId.get(target.itemId)?.title;
       const legacyTitle = !hasValidSnapshots ? legacyItemsById.get(target.itemId)?.title : undefined;
       const title = snapshotTitle ?? legacyTitle;
-      if (title) {
+      const startsQuestionSession = activeQuestionSessionItemId !== target.itemId;
+      if (startsQuestionSession && title) {
         entries.push({
           type: 'QUESTION_TARGET_INTRO',
           id: `question-target-intro:${message.id}`,
@@ -203,6 +227,7 @@ export function buildConversationTimeline(request: SolarRequest): ConversationTi
         });
       }
       entries.push({ type: 'MESSAGE', id: `message:${message.id}`, message });
+      activeQuestionSessionItemId = target.itemId;
     }
   }
 

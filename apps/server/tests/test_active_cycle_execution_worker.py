@@ -90,6 +90,7 @@ def test_task_create_multi_block_amount_distribution_never_persists_zero_unit():
         payload=make_task_payload(
             title="자료구조 과제",
             estimated_minutes=240,
+            deadline_at_iso=datetime(2026, 7, 29, 23, 59, 59, tzinfo=SEOUL).isoformat(),
             amount_text="2문제",
             amount_source="USER",
         ),

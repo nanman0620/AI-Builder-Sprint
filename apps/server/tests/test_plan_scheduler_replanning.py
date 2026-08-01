@@ -9,10 +9,16 @@ from tests.support_scheduler import (
     FakeSchedulerSession,
     make_cycle,
     make_plan_block,
-    make_task,
+    make_task as _make_task,
 )
 
 SEOUL = ZoneInfo("Asia/Seoul")
+
+
+def make_task(**kwargs):
+    """재계획 상태 전이 테스트는 당일 마감으로 기존 검증 초점을 유지한다."""
+    kwargs.setdefault("deadline_at", datetime(2026, 7, 29, 23, 59, 59, tzinfo=SEOUL))
+    return _make_task(**kwargs)
 
 
 def _now():

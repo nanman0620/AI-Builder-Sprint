@@ -55,6 +55,30 @@ _FS_CREATE_ITEM_KEYS = _TASK_DELETE_ITEM_KEYS
 _FS_UPDATE_ITEM_KEYS = _FS_CREATE_ITEM_KEYS | {"updateFields"}
 _FS_DELETE_ITEM_KEYS = _FS_CREATE_ITEM_KEYS
 
+UNSUPPORTED_RECURRING_TASK_INTENT = "RECURRING_TASK"
+
+# Conservative server-side safety net. This intentionally recognizes only clear,
+# standalone Korean recurrence expressions; SOLAR remains the primary classifier.
+_CLEAR_TASK_RECURRENCE_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"(?<![\w가-힣])매일(?!경제)(?=\s|$)",
+        r"(?<![\w가-힣])매주(?=\s+(?!(?:라는|이라는)\b)|$)",
+        r"(?<![\w가-힣])매(?:달|년)(?=\s|$)",
+        r"(?<![\w가-힣])(?:평일|주말)마다(?=\s|$)",
+        r"(?<![\w가-힣])격일(?:로)?(?=\s|$)",
+        r"(?<![\w가-힣])\d+\s*일마다(?=\s|$)",
+        r"(?<![\w가-힣])주\s*\d+\s*회(?=\s|$)",
+        r"(?<![\w가-힣])반복해서(?=\s|$)",
+        r"(?<![\w가-힣])매번(?=\s|$)",
+    )
+)
+
+
+def has_clear_task_recurrence_intent(text: str) -> bool:
+    """Return true only for explicit standalone recurrence expressions."""
+    return any(pattern.search(text) for pattern in _CLEAR_TASK_RECURRENCE_PATTERNS)
+
 _TASK_PAYLOAD_KEYS = {
     "title", "deadlineAt", "estimatedMinutes", "estimatedMinutesSource",
     "remainingMinutes", "amountText", "amountSource",
@@ -141,6 +165,7 @@ class SolarAnalysisItem:
     missing_fields: list[str]
     pending_question: dict | None
     target_kind: str | None = None  # "ENTITY"|"REQUEST_ITEM"|None — CHANGE_INPUT 모드에서만 값 있음
+    unsupported_intent: str | None = None
 
 
 @dataclass(frozen=True)
@@ -957,9 +982,16 @@ def _parse_item(
             allowed_item_keys = _TASK_UPDATE_ITEM_KEYS if is_task else _FS_UPDATE_ITEM_KEYS
         else:
             allowed_item_keys = _TASK_DELETE_ITEM_KEYS if is_task else _FS_DELETE_ITEM_KEYS
+    if analysis_mode == "INITIAL" and is_task and "unsupportedIntent" in raw:
+        allowed_item_keys = allowed_item_keys | {"unsupportedIntent"}
     _require_exact_keys(raw, allowed_item_keys, f"{entity_type} item({action})")
 
     raw_line_text = _require_non_blank_str(raw.get("rawLineText"), "item.rawLineText")
+    unsupported_intent = raw.get("unsupportedIntent") if is_task else None
+    if unsupported_intent not in (None, UNSUPPORTED_RECURRING_TASK_INTENT):
+        raise SolarUnavailableError("unsupportedIntent 값이 올바르지 않다.")
+    if unsupported_intent is not None and analysis_mode != "INITIAL":
+        raise SolarUnavailableError("unsupportedIntent는 최초 TASK 분석에서만 허용된다.")
 
     target_entity_id = raw.get("targetEntityId")
 
@@ -1080,6 +1112,7 @@ def _parse_item(
         missing_fields=missing_fields,
         pending_question=pending_question,
         target_kind=resolved_target_kind,
+        unsupported_intent=unsupported_intent,
     )
 
 
@@ -1602,6 +1635,10 @@ def _build_prompt_messages(
         context["candidateFixedSchedules"] = candidate_fixed_schedules
 
     system_prompt = (
+        "모든 TASK item에는 unsupportedIntent를 넣으세요. 매일, 매주, 평일마다, 주 3회처럼 "
+        "반복 수행 의도가 명확하면 값은 \"RECURRING_TASK\", 아니면 null입니다. 반복 의도를 "
+        "title이나 일반 필드에 흡수하지 말고, 회당 시간·분량을 Task 전체 시간·분량으로 "
+        "확정하지 마세요. FIXED_SCHEDULE에는 이 필드를 넣지 마세요.\n\n"
         "당신은 '이음' 서비스에서 사용자의 자연어 입력을 분석해 할 일(TASK)·고정 일정"
         "(FIXED_SCHEDULE) 카드로 구조화하는 분석기입니다. 반드시 아래 JSON 스키마 하나로만"
         " 응답하고, 다른 설명·마크다운·코드블록을 절대 덧붙이지 마세요.\n\n"

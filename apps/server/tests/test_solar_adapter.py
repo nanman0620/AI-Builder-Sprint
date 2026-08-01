@@ -99,6 +99,32 @@ def test_parse_success_create_task_all_fields_present():
     assert item.normalized_payload["remainingMinutes"] is None  # CREATE는 서비스가 채운다.
 
 
+def test_parse_task_accepts_structured_unsupported_recurring_intent():
+    raw = _task_create_item()
+    raw["rawLineText"] = "매일 영어 단어 외울래"
+    raw["unsupportedIntent"] = "RECURRING_TASK"
+
+    item = _parse(_envelope(items=[raw])).items[0]
+
+    assert item.unsupported_intent == "RECURRING_TASK"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["매일 영어 공부", "매주 월요일 과제 복습", "평일마다 단어 암기", "주 3회 운동 기록", "격일로 문제 풀이"],
+)
+def test_clear_task_recurrence_guard_true_positives(text):
+    assert solar_client.has_clear_task_recurrence_intent(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["매일경제 기사 읽기", "반복문 문제 5개 풀기", "‘매주’라는 표현을 발표문에서 수정하기"],
+)
+def test_clear_task_recurrence_guard_false_positives(text):
+    assert solar_client.has_clear_task_recurrence_intent(text) is False
+
+
 def test_parse_create_missing_fields_and_pending_question_cross_check():
     item_raw = _task_create_item(
         deadlineAt=None, estimatedMinutes=None, estimatedMinutesSource=None, amountText=None, amountSource=None
