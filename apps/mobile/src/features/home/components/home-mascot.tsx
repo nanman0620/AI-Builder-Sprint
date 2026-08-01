@@ -39,7 +39,7 @@ export function ScoreMascot({ scoreBand, style }: ScoreMascotProps) {
 
 const styles = StyleSheet.create({
   scoreMascot: {
-    width: 128,
-    height: 128,
+    width: 210,
+    height: 210,
   },
 });

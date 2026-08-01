@@ -120,6 +120,25 @@ export function getVisibleCheckIn(period: CalendarPeriodData) {
   return period.temporalState === 'PAST' ? period.checkIn : null;
 }
 
+export function getPeriodGaugeValue(period: CalendarPeriodData): number | null {
+  if (period.temporalState === 'PAST') {
+    return period.checkIn?.score ?? null;
+  }
+  if (period.temporalState === 'FUTURE') {
+    return null;
+  }
+
+  const currentBlocks = period.planBlocks.filter(
+    (block) => block.status === 'PLANNED' || block.status === 'CHECKED'
+  );
+  if (currentBlocks.length === 0) {
+    return null;
+  }
+
+  const checkedCount = currentBlocks.filter((block) => block.status === 'CHECKED').length;
+  return (checkedCount / currentBlocks.length) * 100;
+}
+
 export function hasDayData(day: CalendarDay | undefined): boolean {
   return Boolean(
     day?.periods.some(

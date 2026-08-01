@@ -73,7 +73,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: 24,
     color: colors.text,
-  }, 
+  },
   sendButton: {
     width: 40,
     height: 40,

@@ -37,13 +37,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: 16,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.sm +6,
     paddingHorizontal: spacing.md,
     marginBottom: spacing.sm,
   },
   rowChecked: {
     backgroundColor: colors.primarySoft,
-    borderColor: colors.primarySoft,
+    borderColor: '#CB72FF',
   },
   checkbox: {
     width: 24,

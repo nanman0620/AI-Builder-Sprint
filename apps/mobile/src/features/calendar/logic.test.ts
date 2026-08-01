@@ -7,6 +7,7 @@ import {
   getAdjacentMonthRange,
   getCompletedCount,
   getMonthRange,
+  getPeriodGaugeValue,
   getVisibleCheckIn,
   getVisiblePlanBlocks,
   hasDayData,
@@ -42,6 +43,41 @@ test('과거 CheckIn 점수와 실제 score=0을 null과 구분해 보존한다'
   assert.equal(getVisibleCheckIn(zero)?.score, 0);
   assert.equal(getVisibleCheckIn(makePeriod()), null);
   assert.equal(getVisibleCheckIn({ ...zero, temporalState: 'CURRENT' }), null);
+});
+
+test('게이지는 과거 실제 score와 현재 CHECKED 개수 비율만 사용하고 미래에는 숨긴다', () => {
+  const pastZero = makePeriod({
+    checkIn: {
+      id: 'check-0',
+      score: 0,
+      totalPlanCount: 2,
+      completedPlanCount: 0,
+      finalizedAt: '2026-07-25T12:00:00+09:00',
+    },
+  });
+  assert.equal(getPeriodGaugeValue(pastZero), 0);
+  assert.equal(
+    getPeriodGaugeValue({
+      ...pastZero,
+      checkIn: pastZero.checkIn ? { ...pastZero.checkIn, score: 75 } : null,
+    }),
+    75
+  );
+
+  const current = makePeriod({
+    temporalState: 'CURRENT',
+    planBlocks: [
+      { id: 'checked-1', displayTitle: '완료 1', status: 'CHECKED', displayOrder: 0 },
+      { id: 'checked-2', displayTitle: '완료 2', status: 'CHECKED', displayOrder: 1 },
+      { id: 'planned', displayTitle: '예정', status: 'PLANNED', displayOrder: 2 },
+    ],
+  });
+  assert.equal(getPeriodGaugeValue(current), (2 / 3) * 100);
+  assert.equal(getPeriodGaugeValue(makePeriod({ temporalState: 'CURRENT' })), null);
+  assert.equal(
+    getPeriodGaugeValue({ ...current, temporalState: 'FUTURE' }),
+    null
+  );
 });
 
 test('현재 날짜의 과거·현재·미래 분기를 정해진 순서로 정렬한다', () => {

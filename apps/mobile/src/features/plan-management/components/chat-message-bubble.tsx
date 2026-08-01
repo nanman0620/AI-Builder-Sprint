@@ -1,3 +1,4 @@
+import { LinearGradient } from 'expo-linear-gradient';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { colors, spacing, typography } from '@/src/constants/tokens';
@@ -13,9 +14,19 @@ export function ChatMessageBubble({ message }: ChatMessageBubbleProps) {
 
   return (
     <View style={[styles.row, isUser ? styles.rowRight : styles.rowLeft]}>
-      <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
-        <Text style={[styles.text, isUser ? styles.textUser : styles.textAssistant]}>{message.content}</Text>
-      </View>
+      {isUser ? (
+        <LinearGradient
+          colors={['#A83DE2', '#D279FE']}
+          start={{ x: 0, y: 0.5 }}
+          end={{ x: 1, y: 0.5 }}
+          style={styles.bubble}>
+          <Text style={[styles.text, styles.textUser]}>{message.content}</Text>
+        </LinearGradient>
+      ) : (
+        <View style={[styles.bubble, styles.bubbleAssistant]}>
+          <Text style={[styles.text, styles.textAssistant]}>{message.content}</Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -39,9 +50,6 @@ const styles = StyleSheet.create({
   },
   bubbleAssistant: {
     backgroundColor: colors.primarySoft,
-  },
-  bubbleUser: {
-    backgroundColor: colors.primary,
   },
   text: {
     ...typography.body,

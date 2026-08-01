@@ -47,7 +47,7 @@ function TabBarVisual({
 
 function TabBarBackground() {
   return (
-    <View pointerEvents="none" style={styles.tabBarBackground}>
+    <View style={styles.tabBarBackground}>
       <View style={styles.tabBarDivider} />
     </View>
   );
@@ -151,12 +151,15 @@ const styles = StyleSheet.create({
     height: TAB_BAR_ASSET_HEIGHT,
   },
   tabBarBackground: {
+    pointerEvents: 'none',
     ...StyleSheet.absoluteFillObject,
+    top: TAB_BAR_DIVIDER_TOP,
+    backgroundColor: colors.background,
     overflow: 'visible',
   },
   tabBarDivider: {
     position: 'absolute',
-    top: TAB_BAR_DIVIDER_TOP,
+    top: 0,
     left: 0,
     right: 0,
     height: TAB_BAR_DIVIDER_HEIGHT,
