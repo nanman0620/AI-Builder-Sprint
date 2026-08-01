@@ -189,7 +189,10 @@ def test_post_delete_verification_fails_execution_when_row_remains(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_new_planned_amount_text_is_null_and_display_title_is_task_title_fallback():
+def test_new_planned_uses_task_amount_text_when_single_block_fully_placed():
+    """Task가 이번 재계획에서 신규 블록 1개로 남김없이 배치되면(보존된 CHECKED도 없으면)
+    그 블록이 Task 전체 분량을 대표하므로 SOLAR 연동 전 제한적 MVP fallback으로
+    title+amount_text를 쓴다."""
     user_id, cycle, request, db, session = _setup()
     task = make_task(
         user_id=user_id, plan_cycle_id=cycle.id, estimated_minutes=60, remaining_minutes=60,
@@ -207,11 +210,40 @@ def test_new_planned_amount_text_is_null_and_display_title_is_task_title_fallbac
 
     assert task.amount_text == "2문제"
     new_blocks = [b for b in db.all_rows(PlanBlock) if b.task_id == task.id]
+    assert len(new_blocks) == 1
+    assert new_blocks[0].allocated_amount_text == "2문제"
+    assert new_blocks[0].display_title == "자료구조 2문제"
+
+
+def test_new_planned_keeps_title_only_fallback_when_current_checked_remains():
+    """현재 분기에 보존된 CHECKED가 남아 있으면, 신규 블록이 1개·전량 배치라도 Task
+    전체 분량을 대표하지 않으므로 title-only fallback을 유지한다."""
+    user_id, cycle, request, db, session = _setup()
+    task = make_task(
+        user_id=user_id, plan_cycle_id=cycle.id, estimated_minutes=90, remaining_minutes=90,
+        title="자료구조", amount_text="6문제", created_at=NOW,
+    )
+    current_checked = make_plan_block(
+        user_id=user_id, plan_cycle_id=cycle.id, task_id=task.id, plan_date=CURRENT_DATE, period=CURRENT_PERIOD,
+        allocated_minutes=30, status=PlanBlockStatus.CHECKED, display_title="체크된 블록",
+        allocated_amount_text=None, now=NOW,
+    )
+    item = _title_update_item(user_id, request.id, task)
+    db.seed(task, current_checked, item)
+
+    with session.begin():
+        svc.execute_active_cycle(session, request)
+
+    new_blocks = [
+        b for b in db.all_rows(PlanBlock) if b.task_id == task.id and b.status == PlanBlockStatus.PLANNED
+    ]
     assert new_blocks
     for block in new_blocks:
         assert block.allocated_amount_text is None
-        assert block.display_title == "자료구조"
-        assert "2문제" not in block.display_title
+        assert block.display_title == task.title
+        assert "6문제" not in block.display_title
+    assert current_checked.display_title == "체크된 블록"
+    assert current_checked.allocated_amount_text is None
 
 
 def test_cancelled_task_excluded_from_new_planned_but_current_checked_kept():

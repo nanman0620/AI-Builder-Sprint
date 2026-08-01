@@ -77,6 +77,13 @@ export function resolveScoreBand(score: number): ScoreBand {
   return 'SCORE_00';
 }
 
+// IN_PROGRESS에서도 서버의 progress.percentage를 같은 네 개의 정적 자산 구간에 매핑한다.
+// percentage는 HomeProgress에서 number로 고정되어 있고, 체크 직후 optimistic/server progress가
+// 모두 이 함수로 다시 파생되므로 100%가 기본 마스코트로 남지 않는다.
+export function resolveProgressMascotBand(percentage: number): ScoreBand {
+  return resolveScoreBand(percentage);
+}
+
 // logicalDate("YYYY-MM-DD")를 "7월 29일 수요일" 형태로만 표시한다. 기기 로컬 타임존에 따라 날짜가
 // 밀리지 않도록 UTC로 고정해 구성·포맷하며, 오늘 날짜를 다시 계산하지 않고 서버가 준 문자열만 그대로 쓴다.
 export function formatLogicalDateBadge(logicalDate: string): string {

@@ -138,7 +138,17 @@ export function isDayEmpty(day: CalendarDay | undefined): boolean {
 export function getCompletedCount(day: CalendarDay | undefined): number {
   return (
     day?.periods.reduce(
-      (total, period) => total + (period.checkIn?.completedPlanCount ?? 0),
+      (total, period) =>
+        total +
+        period.planBlocks.filter((block) => {
+          if (period.temporalState === 'PAST') {
+            return block.status === 'COMPLETED';
+          }
+          if (period.temporalState === 'CURRENT') {
+            return block.status === 'CHECKED';
+          }
+          return false;
+        }).length,
       0
     ) ?? 0
   );
