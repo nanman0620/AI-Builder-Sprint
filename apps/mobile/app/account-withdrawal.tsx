@@ -2,7 +2,7 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { colors, spacing, typography } from '@/src/constants/tokens';
+import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 import { AuthSubmitButton } from '@/src/features/auth/components/auth-submit-button';
 import { useAppSync } from '@/src/features/app-sync/app-sync-context';
 import { signOut } from '@/src/features/auth/services/auth-service';
@@ -112,7 +112,7 @@ const styles = StyleSheet.create({
   },
   cancelText: {
     ...typography.body,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
     color: colors.text,
   },
 });

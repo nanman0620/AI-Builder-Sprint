@@ -1,6 +1,6 @@
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { colors, spacing, typography } from '@/src/constants/tokens';
+import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
 import type { ExecutionCompletedResult } from '../types';
 
@@ -80,7 +80,7 @@ const styles = StyleSheet.create({
   summaryText: {
     ...typography.body,
     color: '#4F8A72',
-    fontWeight: '700',
+    fontFamily: fonts.bold,
   },
   description: {
     ...typography.caption,
@@ -103,7 +103,7 @@ const styles = StyleSheet.create({
   buttonText: {
     ...typography.body,
     color: colors.background,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
   },
   disabled: {
     opacity: 0.5,

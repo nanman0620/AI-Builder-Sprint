@@ -3,7 +3,7 @@ import { ScrollView, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ErrorView } from '@/src/components/common/error-view';
 import { LoadingView } from '@/src/components/common/loading-view';
-import { colors, spacing, typography } from '@/src/constants/tokens';
+import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
 import { useCalendar } from '../hooks/use-calendar';
 import {
@@ -248,7 +248,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   refreshErrorText: { ...typography.caption, color: colors.text, flex: 1 },
-  retryText: { ...typography.caption, color: colors.primary, fontWeight: '700' },
+  retryText: { ...typography.caption, color: colors.primary, fontFamily: fonts.bold },
   monthHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -260,7 +260,7 @@ const styles = StyleSheet.create({
   weekday: {
     ...typography.caption,
     color: colors.textSecondary,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
     textAlign: 'center',
     width: `${100 / 7}%`,
   },
@@ -275,7 +275,7 @@ const styles = StyleSheet.create({
   },
   dayNumberCircleSelected: { backgroundColor: colors.primary },
   dayNumber: { ...typography.body, color: colors.text },
-  dayNumberSelected: { color: colors.background, fontWeight: '700' },
+  dayNumberSelected: { color: colors.background, fontFamily: fonts.bold },
   dayDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.primary, marginTop: 2 },
   detail: { marginTop: spacing.lg },
   detailHeader: {
@@ -285,7 +285,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   detailTitle: { ...typography.title, color: colors.text },
-  completedCount: { ...typography.body, color: colors.primary, fontWeight: '700' },
+  completedCount: { ...typography.body, color: colors.primary, fontFamily: fonts.bold },
   periodGroup: { gap: spacing.sm, marginBottom: spacing.md },
   periodHeader: {
     minHeight: 56,
@@ -298,7 +298,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   periodHeaderWithScore: { borderColor: colors.primary },
-  periodTitle: { ...typography.body, color: colors.text, fontWeight: '700' },
+  periodTitle: { ...typography.body, color: colors.text, fontFamily: fonts.bold },
   scoreCircle: {
     width: 36,
     height: 36,
@@ -308,7 +308,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  scoreText: { ...typography.caption, color: colors.primary, fontWeight: '700' },
+  scoreText: { ...typography.caption, color: colors.primary, fontFamily: fonts.bold },
   scheduleCard: {
     borderWidth: 2,
     borderColor: colors.primary,
@@ -316,7 +316,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primarySoft,
     padding: spacing.md,
   },
-  scheduleHeading: { ...typography.body, color: colors.text, fontWeight: '700', marginBottom: spacing.sm },
+  scheduleHeading: { ...typography.body, color: colors.text, fontFamily: fonts.bold, marginBottom: spacing.sm },
   scheduleContent: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.sm },
   scheduleTitle: { ...typography.body, color: colors.text, flex: 1 },
   scheduleTime: { ...typography.body, color: colors.textSecondary },

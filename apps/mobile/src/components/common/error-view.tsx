@@ -1,6 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { colors, spacing, typography } from '@/src/constants/tokens';
+import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
 // 문구는 docs/ai/IMPLEMENTATION_CONTEXT.md 11절의 일반 오류 표준 문구를 기본값으로 사용한다.
 const DEFAULT_TITLE = '정보를 불러오지 못했어요.';
@@ -62,7 +62,7 @@ const styles = StyleSheet.create({
   buttonText: {
     ...typography.body,
     color: colors.background,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
     textAlign: 'center',
   },
 });

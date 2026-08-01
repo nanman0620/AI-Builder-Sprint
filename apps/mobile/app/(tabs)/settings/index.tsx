@@ -1,10 +1,11 @@
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ErrorView } from '@/src/components/common/error-view';
-import { colors, spacing, typography } from '@/src/constants/tokens';
+import { colors, fonts } from '@/src/constants/tokens';
 import { useAppSync } from '@/src/features/app-sync/app-sync-context';
 import { signOut } from '@/src/features/auth/services/auth-service';
 import { useBootstrap } from '@/src/features/bootstrap/bootstrap-context';
@@ -138,58 +139,90 @@ export default function SettingsScreen() {
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-      <Text style={styles.title}>설정</Text>
-      {isLoading || !profile ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={colors.primary} />
+    <SafeAreaView style={styles.safeArea} edges={['top']}>
+      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>설정</Text>
         </View>
-      ) : (
-        <>
-          <ProfileCard profile={profile} />
-          <View style={styles.group}>
-            <Text style={styles.groupTitle}>계정 관리</Text>
-            <Pressable style={styles.menuItem} onPress={() => router.push('/(tabs)/settings/profile')}>
-              <Text style={styles.menuText}>개인정보 수정</Text>
-            </Pressable>
-            <Pressable style={styles.menuItem} onPress={() => setIsLogoutVisible(true)}>
-              <Text style={styles.menuText}>로그아웃</Text>
-            </Pressable>
-            <Pressable style={styles.menuItem} onPress={() => router.push('/account-withdrawal')}>
-              <Text style={styles.menuText}>회원탈퇴</Text>
-            </Pressable>
-            {logoutError ? <Text style={styles.errorText}>{logoutError}</Text> : null}
-            {loadError && profile ? (
-              <View style={styles.refreshError}>
-                <Text style={styles.errorText}>{loadError}</Text>
-                <Pressable disabled={isLoading} onPress={() => void loadProfile()}>
-                  <Text style={styles.retryText}>다시 시도</Text>
-                </Pressable>
-              </View>
-            ) : null}
+        {isLoading || !profile ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={PURPLE} />
           </View>
-        </>
-      )}
-      <LogoutConfirmModal
-        visible={isLogoutVisible}
-        loading={isSubmitting}
-        onCancel={() => setIsLogoutVisible(false)}
-        onConfirm={handleLogout}
-      />
-    </ScrollView>
+        ) : (
+          <>
+            <View style={styles.content}>
+              <ProfileCard profile={profile} />
+              <View style={styles.menuGroup}>
+                <Pressable style={styles.menuCard} onPress={() => router.push('/(tabs)/settings/profile')}>
+                  <Text style={styles.menuTitle}>개인정보 수정</Text>
+                  <Text style={styles.menuSubtitle}>닉네임·이메일·비밀번호를 수정해요</Text>
+                </Pressable>
+                <Pressable style={styles.menuCard} onPress={() => setIsLogoutVisible(true)}>
+                  <Text style={styles.menuTitle}>로그아웃</Text>
+                  <Text style={styles.menuSubtitle}>현재 기기에서 로그아웃</Text>
+                </Pressable>
+                <Pressable style={styles.menuCard} onPress={() => router.push('/account-withdrawal')}>
+                  <Text style={styles.menuTitle}>회원탈퇴</Text>
+                  <Text style={styles.menuSubtitle}>이음 서비스 탈퇴</Text>
+                </Pressable>
+                {logoutError ? <Text style={styles.errorText}>{logoutError}</Text> : null}
+                {loadError && profile ? (
+                  <View style={styles.refreshError}>
+                    <Text style={styles.errorText}>{loadError}</Text>
+                    <Pressable disabled={isLoading} onPress={() => void loadProfile()}>
+                      <Text style={styles.retryText}>다시 시도</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+              </View>
+            </View>
+            <View style={styles.footer}>
+              <Image
+                source={require('@/assets/brand/eum-logo-tagline.png')}
+                style={styles.footerLogo}
+                resizeMode="contain"
+              />
+            </View>
+          </>
+        )}
+        <LogoutConfirmModal
+          visible={isLogoutVisible}
+          loading={isSubmitting}
+          onCancel={() => setIsLogoutVisible(false)}
+          onConfirm={handleLogout}
+        />
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
+const PURPLE = '#D791FF';
+const TEXT = '#1D1D23';
+const TEXT_SECONDARY = '#85818A';
+const BORDER = '#E6E1E9';
+
+const LOGO_TAGLINE_RATIO = 232 / 403;
+const LOGO_WIDTH = 140;
+
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
   container: {
     flexGrow: 1,
     backgroundColor: colors.background,
-    padding: spacing.lg,
   },
-  title: {
-    ...typography.title,
-    color: colors.text,
-    marginBottom: spacing.lg,
+  header: {
+    paddingVertical: 14,
+    borderBottomWidth: 0.72,
+    borderBottomColor: BORDER,
+  },
+  headerTitle: {
+    fontSize: 15,
+    fontFamily: fonts.bold,
+    color: TEXT,
+    textAlign: 'center',
   },
   loadingContainer: {
     flex: 1,
@@ -197,39 +230,58 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minHeight: 240,
   },
-  group: {
-    marginTop: spacing.md,
+  content: {
+    marginTop: 21,
   },
-  groupTitle: {
-    ...typography.body,
-    color: colors.textSecondary,
-    marginBottom: spacing.sm,
+  menuGroup: {
+    marginTop: 9,
   },
-  menuItem: {
+  menuCard: {
+    height: 77,
+    justifyContent: 'center',
     backgroundColor: colors.background,
-    borderRadius: 14,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: colors.border,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
-    marginBottom: spacing.sm,
+    borderColor: BORDER,
+    paddingLeft: 18,
+    marginHorizontal: 21,
+    marginBottom: 12,
   },
-  menuText: {
-    ...typography.body,
-    color: colors.text,
+  menuTitle: {
+    fontSize: 14,
+    fontFamily: fonts.semiBold,
+    color: TEXT,
+  },
+  menuSubtitle: {
+    marginTop: 4,
+    fontSize: 10,
+    fontFamily: fonts.regular,
+    color: TEXT_SECONDARY,
   },
   errorText: {
-    ...typography.body,
+    fontSize: 13,
+    fontFamily: fonts.regular,
     color: colors.error,
-    marginTop: spacing.sm,
+    marginTop: 8,
+    marginHorizontal: 21,
   },
   refreshError: {
-    marginTop: spacing.sm,
+    marginTop: 8,
   },
   retryText: {
-    ...typography.body,
-    color: colors.primary,
-    fontWeight: '700',
-    marginTop: spacing.sm,
+    fontSize: 13,
+    color: PURPLE,
+    fontFamily: fonts.bold,
+    marginTop: 8,
+    marginHorizontal: 21,
+  },
+  footer: {
+    marginTop: 130,
+    marginBottom: 32,
+    alignItems: 'center',
+  },
+  footerLogo: {
+    width: LOGO_WIDTH,
+    height: LOGO_WIDTH * LOGO_TAGLINE_RATIO,
   },
 });

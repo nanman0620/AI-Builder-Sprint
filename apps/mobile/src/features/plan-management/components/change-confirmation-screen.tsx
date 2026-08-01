@@ -1,6 +1,6 @@
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { colors, spacing, typography } from '@/src/constants/tokens';
+import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
 import type { DecisionOption, SolarRequest } from '../types';
 import { ChatMessageBubble } from './chat-message-bubble';
@@ -71,7 +71,7 @@ const styles = StyleSheet.create({
   prompt: {
     ...typography.body,
     color: colors.text,
-    fontWeight: '600',
+    fontFamily: fonts.semiBold,
     backgroundColor: colors.primarySoft,
     borderRadius: 12,
     padding: spacing.md,

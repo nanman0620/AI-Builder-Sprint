@@ -1,4 +1,5 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { useFonts } from 'expo-font';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useRef } from 'react';
@@ -6,7 +7,7 @@ import { AppState, type AppStateStatus } from 'react-native';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { colors } from '@/src/constants/tokens';
+import { colors, fonts } from '@/src/constants/tokens';
 import { AppSyncProvider, useAppSync } from '@/src/features/app-sync/app-sync-context';
 import { BootstrapProvider, useBootstrap } from '@/src/features/bootstrap/bootstrap-context';
 import { resolveAppRoute } from '@/src/features/bootstrap/route';
@@ -94,6 +95,18 @@ function RootNavigator() {
 }
 
 export default function RootLayout() {
+  const [fontsLoaded] = useFonts({
+    [fonts.regular]: require('@/assets/fonts/Pretendard-Regular.otf'),
+    [fonts.medium]: require('@/assets/fonts/Pretendard-Medium.otf'),
+    [fonts.semiBold]: require('@/assets/fonts/Pretendard-SemiBold.otf'),
+    [fonts.bold]: require('@/assets/fonts/Pretendard-Bold.otf'),
+    [fonts.interSemiBold]: require('@/assets/fonts/Inter-SemiBold.ttf'),
+  });
+
+  if (!fontsLoaded) {
+    return null;
+  }
+
   return (
     <BootstrapProvider>
       <AppSyncProvider>

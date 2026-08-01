@@ -1,7 +1,7 @@
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ErrorView } from '@/src/components/common/error-view';
-import { colors, spacing, typography } from '@/src/constants/tokens';
+import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
 import type { SolarRequest } from '../types';
 import { RequestItemCard } from './request-item-card';
@@ -94,7 +94,7 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.textSecondary,
     textAlign: 'center',
-    fontWeight: '700',
+    fontFamily: fonts.bold,
   },
   primaryButton: {
     backgroundColor: colors.primary,
@@ -103,7 +103,7 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.background,
     textAlign: 'center',
-    fontWeight: '700',
+    fontFamily: fonts.bold,
   },
   disabled: {
     opacity: 0.5,
