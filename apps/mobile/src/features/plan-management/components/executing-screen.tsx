@@ -57,9 +57,9 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   mascot: {
-    width: 180,
-    height: 180,
-    marginVertical: spacing.lg,
+    width: 240,
+    height: 240,
+    marginVertical: spacing.lg-20,
   },
   description: {
     ...typography.body,

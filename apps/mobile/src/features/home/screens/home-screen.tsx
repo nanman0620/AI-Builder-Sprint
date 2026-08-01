@@ -248,6 +248,8 @@ const styles = StyleSheet.create({
   centerMascot: {
     alignSelf: 'center',
     marginVertical: -40,
+    marginTop: 20,
+    marginBottom: 20,
   },
   bodyHeadline: {
     ...typography.title,
@@ -265,7 +267,7 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bold,
     color: colors.text,
     paddingHorizontal: spacing.lg,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.sm + 10,
   },
   list: {
     flex: 1,

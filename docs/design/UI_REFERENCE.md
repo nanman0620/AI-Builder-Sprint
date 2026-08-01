@@ -76,6 +76,8 @@
 | UI-020 | `ui/screens/UI-020-plan-execution-failed.png` | `EXECUTION_FAILED` | 서버가 실제 `FAILED`일 때만 표시 |
 | UI-021 | `ui/screens/UI-021-plan-exit-confirmation.png` | 작성 중 나가기 오버레이 | DELETE 성공 전 이동 금지 |
 
+- 계획관리 채팅의 사용자 메시지 버블은 왼쪽 `#A83DE2`에서 오른쪽 `#D279FE`로 이어지는 수평 그라데이션과 흰색 텍스트를 사용한다. Assistant 메시지 버블은 기존 `primarySoft` 단색 배경을 유지한다.
+
 ### 캘린더
 
 | ID | 파일 | variant | 구현 메모 |
@@ -85,6 +87,9 @@
 | UI-024 | `ui/screens/UI-024-calendar-empty.png` | 통합 빈 상태 | 할 일·고정 일정·CheckIn이 모두 없음; 이동 버튼 없음 |
 | UI-025 | `ui/screens/UI-025-calendar-mixed-day.png` | 현재 날짜의 과거·현재 분기 혼합 | 각 분기의 실제 시점 규칙 적용 |
 | UI-026 | `ui/screens/UI-026-calendar-past-day.png` | 과거 | `COMPLETED`만 표시하고 `NOT_DONE`은 숨김 |
+
+- 캘린더 분기 헤더 오른쪽에는 과거 분기의 실제 `CheckIn.score`와 현재 분기의 `CHECKED / (PLANNED + CHECKED)` 개수 비율을 원형 게이지로 표시한다. 실제 과거 score 0은 0으로 표시하고, 현재 분기에 PlanBlock이 없거나 미래 분기이면 게이지를 표시하지 않는다.
+- 분기 헤더의 점수 텍스트 접미사(`· N점`)는 사용하지 않고 게이지 중앙에 반올림한 숫자만 표시한다.
 
 ### 설정
 

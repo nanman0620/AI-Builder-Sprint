@@ -59,9 +59,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   mascot: {
-    width: 180,
-    height: 180,
-    marginBottom: spacing.lg,
+    width: 240,
+    height: 240,
+    marginBottom: spacing.lg-30,
   },
   title: {
     ...typography.title,

@@ -1,15 +1,16 @@
 import { MaterialIcons } from '@expo/vector-icons';
-import { ScrollView, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ErrorView } from '@/src/components/common/error-view';
 import { LoadingView } from '@/src/components/common/loading-view';
+import { CircularGauge } from '@/src/components/CircularGauge';
 import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
 import { useCalendar } from '../hooks/use-calendar';
 import {
   formatSegmentTime,
   getCompletedCount,
-  getVisibleCheckIn,
+  getPeriodGaugeValue,
   getVisiblePlanBlocks,
   hasDayData,
   hasOnlyFuturePeriods,
@@ -19,6 +20,8 @@ import {
   sortPeriods,
 } from '../logic';
 import type { CalendarDay, CalendarPeriodData, CalendarResponse } from '../types';
+
+const mascotDefault = require('@/assets/brand/mascot-default.png');
 
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
 const PERIOD_LABELS = {
@@ -125,25 +128,18 @@ function PlanBlockRow({
 }
 
 function PeriodSection({ period }: { period: CalendarPeriodData }) {
-  const checkIn = getVisibleCheckIn(period);
+  const gaugeValue = getPeriodGaugeValue(period);
   const blocks = getVisiblePlanBlocks(period);
   const schedules = sortFixedSchedules(period.fixedSchedules);
-  if (!checkIn && blocks.length === 0 && schedules.length === 0) {
+  if (gaugeValue === null && blocks.length === 0 && schedules.length === 0) {
     return null;
   }
 
   return (
     <View style={styles.periodGroup}>
-      <View style={[styles.periodHeader, checkIn && styles.periodHeaderWithScore]}>
-        <Text style={styles.periodTitle}>
-          {PERIOD_LABELS[period.period]}
-          {checkIn ? ` · ${checkIn.score}점` : ''}
-        </Text>
-        {checkIn ? (
-          <View style={styles.scoreCircle}>
-            <Text style={styles.scoreText}>{checkIn.score}</Text>
-          </View>
-        ) : null}
+      <View style={[styles.periodHeader, gaugeValue !== null && styles.periodHeaderWithGauge]}>
+        <Text style={styles.periodTitle}>{PERIOD_LABELS[period.period]}</Text>
+        {gaugeValue !== null ? <CircularGauge value={gaugeValue} /> : null}
       </View>
 
       {schedules.map((schedule) => (
@@ -185,6 +181,7 @@ function DayDetail({ date, day }: { date: string; day: CalendarDay | undefined }
 
       {isDayEmpty(day) ? (
         <View style={styles.empty}>
+          <Image source={mascotDefault} style={styles.emptyMascot} resizeMode="contain" />
           <Text style={styles.emptyText}>이 날짜에는 표시할 계획이 없어요.</Text>
         </View>
       ) : (
@@ -255,7 +252,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: spacing.lg,
   },
-  monthTitle: { ...typography.title, color: colors.text },
+    monthTitle: {
+    ...typography.title,
+    fontSize: 16,
+    lineHeight: 30,
+    fontFamily: fonts.bold,
+    color: colors.text,
+  },
   weekRow: { flexDirection: 'row', marginBottom: spacing.sm },
   weekday: {
     ...typography.caption,
@@ -284,12 +287,18 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: spacing.md,
   },
-  detailTitle: { ...typography.title, color: colors.text },
+  detailTitle: {
+    ...typography.title,
+    fontSize: 16,
+    lineHeight: 30,
+    fontFamily: fonts.bold,
+    color: colors.text
+  },
   completedCount: { ...typography.body, color: colors.primary, fontFamily: fonts.bold },
   periodGroup: { gap: spacing.sm, marginBottom: spacing.md },
   periodHeader: {
-    minHeight: 56,
-    borderWidth: 2,
+    minHeight: 50,
+    borderWidth: 1,
     borderColor: colors.textSecondary,
     borderRadius: 16,
     paddingHorizontal: spacing.md,
@@ -297,18 +306,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  periodHeaderWithScore: { borderColor: colors.primary },
+  periodHeaderWithGauge: { borderColor: colors.primary },
   periodTitle: { ...typography.body, color: colors.text, fontFamily: fonts.bold },
-  scoreCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 5,
-    borderColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  scoreText: { ...typography.caption, color: colors.primary, fontFamily: fonts.bold },
   scheduleCard: {
     borderWidth: 2,
     borderColor: colors.primary,
@@ -321,8 +320,8 @@ const styles = StyleSheet.create({
   scheduleTitle: { ...typography.body, color: colors.text, flex: 1 },
   scheduleTime: { ...typography.body, color: colors.textSecondary },
   planRow: {
-    minHeight: 56,
-    borderWidth: 2,
+    minHeight: 50,
+    borderWidth: 1,
     borderColor: colors.textSecondary,
     borderRadius: 14,
     paddingHorizontal: spacing.md,
@@ -343,5 +342,13 @@ const styles = StyleSheet.create({
   statusCircleCompleted: { borderColor: colors.primary, backgroundColor: colors.primary },
   planTitle: { ...typography.body, color: colors.text, flex: 1 },
   empty: { minHeight: 260, alignItems: 'center', justifyContent: 'center' },
-  emptyText: { ...typography.title, color: colors.text, textAlign: 'center' },
+  emptyMascot: { width: 160, height: 160, marginBottom: spacing.md -30, marginTop: spacing.md -90 },
+  emptyText: {
+  ...typography.title,
+  fontSize: 16,
+  lineHeight: 24,
+  fontFamily: fonts.medium,
+  color: colors.text,
+  textAlign: 'center',
+},
 });
