@@ -5,8 +5,9 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Iterator, Sequence
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import and_, case, or_, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.errors import ApiError
 from app.models.enums import PlanBlockStatus, PlanCycleStatus, PlanPeriod, TaskStatus
@@ -417,6 +418,64 @@ _PERIOD_CAPACITY_MINUTES = 240
 _FAR_FUTURE = datetime.max.replace(tzinfo=timezone.utc)
 
 
+# ---------------------------------------------------------------------------
+# plan_date+period 위치 비교 SQL predicate — ACTIVE_CYCLE Worker(과거 CHECKED 존재 확인,
+# 미래 PLANNED 잠금)와 이 파일의 schedule_plan_blocks() 삭제 대상 계산이 공유하는
+# 유일한 출처. _PERIOD_ORDER_LIST 하나에서만 분기 순서를 파생시켜, 두 곳이 서로 다른
+# 분기 순서 정의를 갖는 drift를 구조적으로 차단한다.
+# ---------------------------------------------------------------------------
+
+
+def _period_rank_case(period_column: ColumnElement) -> ColumnElement:
+    """PlanPeriod 컬럼을 0(MORNING)~2(EVENING) 정수 순위로 변환하는 SQL CASE 식."""
+    return case(
+        {period: rank for rank, period in enumerate(_PERIOD_ORDER_LIST)},
+        value=period_column,
+    )
+
+
+def plan_block_before(
+    plan_date_column: ColumnElement,
+    period_column: ColumnElement,
+    reference_date: date,
+    reference_period: PlanPeriod,
+) -> ColumnElement:
+    """(plan_date, period)가 (reference_date, reference_period)보다 과거인지 판별하는 SQL 조건."""
+    reference_rank = _PERIOD_ORDER_LIST.index(reference_period)
+    return or_(
+        plan_date_column < reference_date,
+        and_(plan_date_column == reference_date, _period_rank_case(period_column) < reference_rank),
+    )
+
+
+def plan_block_at_or_after(
+    plan_date_column: ColumnElement,
+    period_column: ColumnElement,
+    reference_date: date,
+    reference_period: PlanPeriod,
+) -> ColumnElement:
+    """(plan_date, period)가 (reference_date, reference_period) 이후(포함)인지 판별하는 SQL 조건."""
+    reference_rank = _PERIOD_ORDER_LIST.index(reference_period)
+    return or_(
+        plan_date_column > reference_date,
+        and_(plan_date_column == reference_date, _period_rank_case(period_column) >= reference_rank),
+    )
+
+
+def plan_block_strictly_after(
+    plan_date_column: ColumnElement,
+    period_column: ColumnElement,
+    reference_date: date,
+    reference_period: PlanPeriod,
+) -> ColumnElement:
+    """(plan_date, period)가 (reference_date, reference_period)보다 미래(경계 제외)인지 판별하는 SQL 조건."""
+    reference_rank = _PERIOD_ORDER_LIST.index(reference_period)
+    return or_(
+        plan_date_column > reference_date,
+        and_(plan_date_column == reference_date, _period_rank_case(period_column) > reference_rank),
+    )
+
+
 def _period_window(plan_date: date, period: PlanPeriod) -> tuple[datetime, datetime]:
     """plan_date+period의 실제 시각 구간 [start, end)를 반환한다."""
     start_hour = _PERIOD_START_HOUR[period]
@@ -586,24 +645,20 @@ def schedule_plan_blocks(
     current_period = resolve_period(now)
 
     # 1. 재계획 대상(현재 분기 미체크 PLANNED + 미래 PLANNED)을 먼저 삭제하고 flush한다.
-    candidate_removable = (
+    #    날짜·분기 경계 판별은 plan_block_at_or_after() SQL predicate 하나로만 수행한다 —
+    #    ACTIVE_CYCLE Worker의 과거 CHECKED 확인·미래 PLANNED 잠금과 동일한 출처를 공유한다.
+    removable_blocks = (
         db.execute(
             select(PlanBlock).where(
                 PlanBlock.user_id == user_id,
                 PlanBlock.plan_cycle_id == plan_cycle_id,
                 PlanBlock.status == PlanBlockStatus.PLANNED,
-                PlanBlock.plan_date >= current_plan_date,
+                plan_block_at_or_after(PlanBlock.plan_date, PlanBlock.period, current_plan_date, current_period),
             )
         )
         .scalars()
         .all()
     )
-    current_rank = _PERIOD_ORDER_LIST.index(current_period)
-    removable_blocks = [
-        block
-        for block in candidate_removable
-        if (block.plan_date, _PERIOD_ORDER_LIST.index(block.period)) >= (current_plan_date, current_rank)
-    ]
     for block in removable_blocks:
         db.delete(block)
     db.flush()

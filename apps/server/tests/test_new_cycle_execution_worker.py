@@ -569,9 +569,13 @@ def test_default_executor_wraps_new_cycle_domain_error_as_execution_domain_error
     assert exc_info.value.code == "PLAN_EXECUTION_FAILED"
 
 
-def test_default_executor_active_cycle_purpose_not_yet_configured():
-    """이 Issue 범위는 NEW_CYCLE뿐이다 — ACTIVE_CYCLE로 dispatch되면 NotConfiguredExecutor와
-    동일하게 항상 도메인 실패로 처리해야 한다(가짜 COMPLETED 금지)."""
+def test_default_executor_active_cycle_purpose_fails_safely_when_cycle_missing():
+    """ACTIVE_CYCLE은 BE-08부터 active_cycle_execution_service.execute_active_cycle에
+    연결된다(더 이상 NotConfiguredExecutor와 동일하게 처리되지 않는다). 이 테스트는 그
+    실제 서비스 로직(test_active_cycle_execution_worker.py에서 상세히 검증)까지 들어가지
+    않고, DefaultExecutor의 dispatch·예외 변환 구조만 확인한다 — 존재하지 않는
+    plan_cycle_id를 가리키는 요청은 항상 안전한 PLAN_EXECUTION_FAILED로 귀결되어야 한다
+    (가짜 COMPLETED 금지)."""
     user_id, request, db, session = _setup()
     request.purpose = SolarRequestPurpose.ACTIVE_CYCLE
     request.plan_cycle_id = uuid.uuid4()
