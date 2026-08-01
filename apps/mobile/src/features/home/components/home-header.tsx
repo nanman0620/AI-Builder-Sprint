@@ -42,7 +42,7 @@ export function HomeHeader({ logicalDate, badgeLabel, nickname, title, descripti
 const styles = StyleSheet.create({
   container: {
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
+    paddingTop: spacing.lg + 4,
   },
   badgeRow: {
     flexDirection: 'row',
@@ -76,6 +76,8 @@ const styles = StyleSheet.create({
   title: {
     ...typography.title,
     color: colors.text,
+    fontSize: 17,
+    marginLeft: 8,
   },
   description: {
     ...typography.body,
