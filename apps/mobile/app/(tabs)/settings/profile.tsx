@@ -1,7 +1,9 @@
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
+  Easing,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -44,6 +46,34 @@ function EyeIcon({ size = 20, color = TEXT_SECONDARY }: { size?: number; color?:
         fill={color}
       />
     </Svg>
+  );
+}
+
+const TOAST_WIDTH = 330;
+const TOAST_HOLD_MS = 2500;
+const TOAST_ENTER_MS = 200;
+const TOAST_EXIT_MS = 300;
+
+type ToastProps = {
+  visible: boolean;
+  message: string;
+  opacity: Animated.Value;
+  translateY: Animated.Value;
+};
+
+// 폼 DOM 흐름 밖에서 뜨는 하단 고정 토스트. 폼 레이아웃에 영향을 주지 않도록
+// position: 'absolute' + pointerEvents: 'none'으로 렌더링한다.
+function Toast({ visible, message, opacity, translateY }: ToastProps) {
+  if (!visible) {
+    return null;
+  }
+
+  return (
+    <View style={styles.toastWrapper} pointerEvents="none">
+      <Animated.View style={[styles.toast, { opacity, transform: [{ translateY }] }]}>
+        <Text style={styles.toastText}>{message}</Text>
+      </Animated.View>
+    </View>
   );
 }
 
@@ -91,16 +121,72 @@ export default function SettingsProfileScreen() {
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [toastVisible, setToastVisible] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
+  const toastOpacity = useRef(new Animated.Value(0)).current;
+  const toastTranslateY = useRef(new Animated.Value(8)).current;
+  const toastHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function triggerToast(message: string) {
+    if (toastHideTimerRef.current) {
+      clearTimeout(toastHideTimerRef.current);
+    }
+    setToastMessage(message);
+    setToastVisible(true);
+    toastOpacity.setValue(0);
+    toastTranslateY.setValue(8);
+    Animated.parallel([
+      Animated.timing(toastOpacity, {
+        toValue: 1,
+        duration: TOAST_ENTER_MS,
+        easing: Easing.out(Easing.ease),
+        useNativeDriver: true,
+      }),
+      Animated.timing(toastTranslateY, {
+        toValue: 0,
+        duration: TOAST_ENTER_MS,
+        easing: Easing.out(Easing.ease),
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    toastHideTimerRef.current = setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(toastOpacity, {
+          toValue: 0,
+          duration: TOAST_EXIT_MS,
+          easing: Easing.in(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(toastTranslateY, {
+          toValue: 8,
+          duration: TOAST_EXIT_MS,
+          easing: Easing.in(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]).start(({ finished }) => {
+        if (finished) {
+          setToastVisible(false);
+        }
+      });
+    }, TOAST_HOLD_MS);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (toastHideTimerRef.current) {
+        clearTimeout(toastHideTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadProfile() {
       setErrorMessage(null);
-      setSuccessMessage(null);
       setIsLoading(true);
       try {
         const response = await getProfile();
@@ -134,7 +220,6 @@ export default function SettingsProfileScreen() {
     }
 
     setErrorMessage(null);
-    setSuccessMessage(null);
 
     const nicknameError = validateNickname(nickname);
     if (nicknameError) {
@@ -153,7 +238,7 @@ export default function SettingsProfileScreen() {
     const hasPasswordInput = password.length > 0 || passwordConfirm.length > 0;
 
     if (!hasNicknameChange && !hasPasswordInput) {
-      setSuccessMessage('변경사항이 없습니다.');
+      triggerToast('변경사항이 없습니다.');
       return;
     }
 
@@ -172,7 +257,7 @@ export default function SettingsProfileScreen() {
         setPasswordConfirm('');
       }
 
-      setSuccessMessage('변경사항이 저장되었습니다.');
+      triggerToast('변경사항이 저장되었습니다.');
     } catch {
       setErrorMessage('변경사항을 저장하지 못했습니다.');
     } finally {
@@ -226,7 +311,6 @@ export default function SettingsProfileScreen() {
           />
 
           {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
-          {successMessage ? <Text style={styles.successText}>{successMessage}</Text> : null}
 
           <Pressable
             style={[styles.saveButton, isSaving ? styles.saveButtonDisabled : null]}
@@ -236,6 +320,7 @@ export default function SettingsProfileScreen() {
           </Pressable>
         </View>
       </ScrollView>
+      <Toast visible={toastVisible} message={toastMessage} opacity={toastOpacity} translateY={toastTranslateY} />
     </SafeAreaView>
   );
 }
@@ -311,12 +396,6 @@ const styles = StyleSheet.create({
     color: colors.error,
     marginBottom: 12,
   },
-  successText: {
-    fontSize: 13,
-    fontFamily: fonts.regular,
-    color: PURPLE,
-    marginBottom: 12,
-  },
   saveButton: {
     height: 47,
     borderRadius: 8,
@@ -331,6 +410,26 @@ const styles = StyleSheet.create({
   saveButtonText: {
     fontSize: 16,
     fontFamily: fonts.semiBold,
+    color: '#FFFFFF',
+  },
+  toastWrapper: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 100,
+    alignItems: 'center',
+  },
+  toast: {
+    width: TOAST_WIDTH,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#616161',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  toastText: {
+    fontSize: 14,
+    fontFamily: fonts.regular,
     color: '#FFFFFF',
   },
 });
