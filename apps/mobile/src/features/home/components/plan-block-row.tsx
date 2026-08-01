@@ -7,7 +7,7 @@ import type { HomePlanBlock } from '../types';
 type PlanBlockRowProps = {
   block: HomePlanBlock;
   disabled: boolean;
-  onToggle: (planBlockId: string, nextChecked: boolean) => void;
+  onToggle: (planBlockId: string) => void;
 };
 
 // IN_PROGRESS(UI-007)에서만 쓰는 체크 가능한 PlanBlock 행. 제목은 서버 displayTitle을 그대로 출력하며
@@ -18,7 +18,8 @@ export function PlanBlockRow({ block, disabled, onToggle }: PlanBlockRowProps) {
   return (
     <Pressable
       disabled={disabled}
-      onPress={() => onToggle(block.id, !isChecked)}
+      accessibilityState={{ disabled }}
+      onPress={() => onToggle(block.id)}
       style={[styles.row, isChecked && styles.rowChecked]}>
       <View style={[styles.checkbox, isChecked && styles.checkboxChecked]}>
         {isChecked ? <Text style={styles.checkmark}>✓</Text> : null}

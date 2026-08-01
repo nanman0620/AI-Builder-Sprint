@@ -28,7 +28,7 @@ export function HomeScreen() {
     hasLoadError,
     finalizingRefreshError,
     reload,
-    isCheckPending,
+    pendingPlanBlockIds,
     checkError,
     toggleCheckState,
     isDeadlineAckPending,
@@ -167,7 +167,12 @@ export function HomeScreen() {
       {checkError ? <Text style={styles.error}>{checkError}</Text> : null}
       <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
         {planBlocks.map((block) => (
-          <PlanBlockRow key={block.id} block={block} disabled={isCheckPending} onToggle={toggleCheckState} />
+          <PlanBlockRow
+            key={block.id}
+            block={block}
+            disabled={pendingPlanBlockIds.has(block.id)}
+            onToggle={toggleCheckState}
+          />
         ))}
       </ScrollView>
     </View>

@@ -5,7 +5,12 @@ import { ApiClientError } from '@/src/services/api/client';
 import { useAppSync } from '@/src/features/app-sync/app-sync-context';
 
 import { getHomeCurrent, patchPlanBlockCheckState, postCheckInAcknowledge, postDeadlineWarningsAcknowledge } from '../api';
-import { applyOptimisticCheckState, computeOptimisticProgress } from '../logic';
+import {
+  applyOptimisticCheckState,
+  computeOptimisticProgress,
+  PlanBlockPendingRegistry,
+  replacePlanBlock,
+} from '../logic';
 import type { DeadlineWarningItem, HomeCurrentResponse } from '../types';
 
 // 문구는 docs/ai/IMPLEMENTATION_CONTEXT.md 11절 "일반 오류" 표준 문구.
@@ -29,7 +34,9 @@ export function useHome() {
   const [hasLoadError, setHasLoadError] = useState(false);
   const [finalizingRefreshError, setFinalizingRefreshError] = useState(false);
 
-  const [isCheckPending, setIsCheckPending] = useState(false);
+  const [pendingPlanBlockIds, setPendingPlanBlockIds] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
   const [checkError, setCheckError] = useState<string | null>(null);
 
   const [isDeadlineAckPending, setIsDeadlineAckPending] = useState(false);
@@ -39,17 +46,25 @@ export function useHome() {
   const [checkInAckError, setCheckInAckError] = useState<string | null>(null);
 
   // React state 반영 전 같은 이벤트 루프에서 연속 입력되는 경우까지 막기 위한 동기 in-flight guard.
-  const checkPendingRef = useRef(false);
+  const checkPendingRegistryRef = useRef(new PlanBlockPendingRegistry());
   const deadlineAckPendingRef = useRef(false);
   const checkInAckPendingRef = useRef(false);
 
   // 홈 탭이 포커스 상태일 때만 true. 조회 결과가 늦게 도착했을 때 blur·unmount 이후 상태 갱신을 막는 데 쓴다.
   const isActiveRef = useRef(false);
+  const isMountedRef = useRef(true);
   // 최신 data를 stale closure 없이 읽기 위한 ref(loadHome을 deps 없는 안정적인 콜백으로 유지하기 위함).
   const dataRef = useRef<HomeCurrentResponse | null>(null);
+
   useEffect(() => {
-    dataRef.current = data;
-  }, [data]);
+    const pendingRegistry = checkPendingRegistryRef.current;
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      isActiveRef.current = false;
+      pendingRegistry.clear();
+    };
+  }, []);
 
   // 진행 중인 GET /home/current 하나를 공유해 중복 요청을 막는다(bootstrap-context.tsx와 동일한 패턴).
   const inFlightRef = useRef<Promise<void> | null>(null);
@@ -94,6 +109,7 @@ export function useHome() {
         if (!isActiveRef.current || generation !== loadGenerationRef.current) {
           return;
         }
+        dataRef.current = result;
         setData(result);
         setHasLoadError(false);
         setFinalizingRefreshError(false);
@@ -169,10 +185,10 @@ export function useHome() {
     setIsLoading(true);
     setHasLoadError(false);
     setFinalizingRefreshError(false);
-    checkPendingRef.current = false;
+    checkPendingRegistryRef.current.clear();
     deadlineAckPendingRef.current = false;
     checkInAckPendingRef.current = false;
-    setIsCheckPending(false);
+    setPendingPlanBlockIds(new Set());
     setIsDeadlineAckPending(false);
     setIsCheckInAckPending(false);
     setCheckError(null);
@@ -180,51 +196,62 @@ export function useHome() {
     setCheckInAckError(null);
   }, [clearPollTimer, resetEpoch]);
 
-  // PlanBlock 체크/해제. MVP에서는 한 번에 하나의 체크 요청만 허용한다(§6).
-  const toggleCheckState = useCallback(
-    async (planBlockId: string, nextChecked: boolean) => {
-      if (checkPendingRef.current || !dataRef.current) {
+  const updatePlanBlocks = useCallback(
+    (update: (planBlocks: HomeCurrentResponse['planBlocks']) => HomeCurrentResponse['planBlocks']) => {
+      const current = dataRef.current;
+      if (!current) {
         return;
       }
-      checkPendingRef.current = true;
+      const planBlocks = update(current.planBlocks);
+      const next = { ...current, planBlocks, progress: computeOptimisticProgress(planBlocks) };
+      dataRef.current = next;
+      setData(next);
+    },
+    []
+  );
+
+  // PlanBlock별로 하나의 체크/해제 요청만 허용한다. 다른 ID의 요청은 독립적으로 진행한다.
+  const toggleCheckState = useCallback(
+    async (planBlockId: string) => {
+      const registry = checkPendingRegistryRef.current;
+      const token = registry.begin(planBlockId);
+      if (!token) {
+        return;
+      }
+      const currentBlock = dataRef.current?.planBlocks.find((block) => block.id === planBlockId);
+      if (!currentBlock || (currentBlock.status !== 'PLANNED' && currentBlock.status !== 'CHECKED')) {
+        registry.finish(planBlockId, token);
+        return;
+      }
+      const nextChecked = currentBlock.status === 'PLANNED';
       const generation = loadGenerationRef.current;
+      const previousBlock = currentBlock;
 
-      const previousPlanBlocks = dataRef.current.planBlocks;
-      const previousProgress = dataRef.current.progress;
-      const optimisticPlanBlocks = applyOptimisticCheckState(
-        previousPlanBlocks,
-        planBlockId,
-        nextChecked,
-        new Date().toISOString()
+      updatePlanBlocks((planBlocks) =>
+        applyOptimisticCheckState(planBlocks, planBlockId, nextChecked, new Date().toISOString())
       );
-      const optimisticProgress = computeOptimisticProgress(optimisticPlanBlocks);
-
-      setData((prev) => (prev ? { ...prev, planBlocks: optimisticPlanBlocks, progress: optimisticProgress } : prev));
       setCheckError(null);
-      setIsCheckPending(true);
+      setPendingPlanBlockIds((previous) => new Set(previous).add(planBlockId));
 
       try {
         const result = await patchPlanBlockCheckState(planBlockId, nextChecked);
-        if (!isActiveRef.current || generation !== loadGenerationRef.current) {
+        if (
+          !isActiveRef.current ||
+          generation !== loadGenerationRef.current ||
+          !registry.owns(planBlockId, token)
+        ) {
           return;
         }
-        setData((prev) =>
-          prev
-            ? {
-                ...prev,
-                planBlocks: prev.planBlocks.map((block) =>
-                  block.id === result.planBlock.id ? result.planBlock : block
-                ),
-                progress: result.progress,
-              }
-            : prev
-        );
+        updatePlanBlocks((planBlocks) => replacePlanBlock(planBlocks, result.planBlock));
       } catch (error) {
-        if (!isActiveRef.current || generation !== loadGenerationRef.current) {
+        if (
+          !isActiveRef.current ||
+          generation !== loadGenerationRef.current ||
+          !registry.owns(planBlockId, token)
+        ) {
           return;
         }
-        // 실패 시 기존 planBlocks·progress로 복구한다(체크 원상 복구, §6).
-        setData((prev) => (prev ? { ...prev, planBlocks: previousPlanBlocks, progress: previousProgress } : prev));
+        updatePlanBlocks((planBlocks) => replacePlanBlock(planBlocks, previousBlock));
 
         if (error instanceof ApiClientError && CHECK_STATE_REQUIRES_RELOAD_CODES.has(error.code)) {
           await loadHome();
@@ -232,11 +259,16 @@ export function useHome() {
         }
         setCheckError(error instanceof ApiClientError ? error.message : GENERIC_ERROR_MESSAGE);
       } finally {
-        checkPendingRef.current = false;
-        setIsCheckPending(false);
+        if (registry.finish(planBlockId, token) && isMountedRef.current) {
+          setPendingPlanBlockIds((previous) => {
+            const next = new Set(previous);
+            next.delete(planBlockId);
+            return next;
+          });
+        }
       }
     },
-    [loadHome]
+    [loadHome, updatePlanBlocks]
   );
 
   // 마감 경고 일괄 확인. 성공 후에는 반드시 GET /home/current를 다시 호출하고, 다음 homeMode를
@@ -303,7 +335,7 @@ export function useHome() {
     hasLoadError,
     finalizingRefreshError,
     reload: loadHome,
-    isCheckPending,
+    pendingPlanBlockIds,
     checkError,
     toggleCheckState,
     isDeadlineAckPending,
