@@ -189,3 +189,29 @@ def test_current_period_fixed_schedule_before_now_does_not_reduce_clock_availabl
     # remaining_clock_available = (18:00-13:00=300) - 0(고정 일정이 now 이전이라 클리핑됨) = 300
     # 둘 중 작은 값
     assert available == 210
+
+
+def test_future_period_capacity_is_clipped_at_exact_deadline():
+    available = svc.compute_period_capacity(
+        FakeSchedulerSession(),
+        user_id=uuid.uuid4(),
+        plan_date=date(2026, 8, 5),
+        period=PlanPeriod.EVENING,
+        is_current_period=False,
+        now=datetime(2026, 8, 2, 4, 0, tzinfo=SEOUL),
+        capacity_end_at=datetime(2026, 8, 5, 20, 0, tzinfo=SEOUL),
+    )
+    assert available == 120
+
+
+def test_period_capacity_is_zero_when_deadline_precedes_period():
+    available = svc.compute_period_capacity(
+        FakeSchedulerSession(),
+        user_id=uuid.uuid4(),
+        plan_date=date(2026, 8, 5),
+        period=PlanPeriod.AFTERNOON,
+        is_current_period=False,
+        now=datetime(2026, 8, 2, 4, 0, tzinfo=SEOUL),
+        capacity_end_at=datetime(2026, 8, 5, 11, 0, tzinfo=SEOUL),
+    )
+    assert available == 0

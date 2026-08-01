@@ -197,6 +197,7 @@ def test_new_planned_uses_task_amount_text_when_single_block_fully_placed():
     task = make_task(
         user_id=user_id, plan_cycle_id=cycle.id, estimated_minutes=60, remaining_minutes=60,
         title="자료구조", amount_text="3문제", created_at=NOW,
+        deadline_at=datetime(2026, 7, 29, 23, 59, 59, tzinfo=SEOUL),
     )
     payload = make_task_update_payload(estimated_minutes=60, remaining_minutes=60, amount_text="2문제", amount_source="USER")
     item = make_task_update_item(

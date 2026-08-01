@@ -10,10 +10,16 @@ from tests.support_scheduler import (
     FakeSchedulerSession,
     make_cycle,
     make_fixed_schedule,
-    make_task,
+    make_task as _make_task,
 )
 
 SEOUL = ZoneInfo("Asia/Seoul")
+
+
+def make_task(**kwargs):
+    """기존 단일 날짜 배치 테스트는 당일 마감을 명시해 검증 범위를 고정한다."""
+    kwargs.setdefault("deadline_at", datetime(2026, 7, 29, 23, 59, 59, tzinfo=SEOUL))
+    return _make_task(**kwargs)
 
 
 def _now():
@@ -141,7 +147,14 @@ def test_priority_orders_by_planning_deadline_then_created_at_then_id():
     result = svc.schedule_plan_blocks(db, user_id=user_id, plan_cycle_id=cycle_id, now=_now())
 
     # 모두 같은 분기(MORNING)에 들어갈 만큼 용량이 충분하므로 display_order 순서가 배치 순서다.
-    ordered = sorted(result.created_blocks, key=lambda b: b.display_order)
+    ordered = sorted(
+        (
+            block
+            for block in result.created_blocks
+            if block.plan_date == date(2026, 7, 29) and block.period == PlanPeriod.MORNING
+        ),
+        key=lambda b: b.display_order,
+    )
     assert [b.task_id for b in ordered] == [urgent.id, no_deadline_older.id, no_deadline_newer.id]
 
 
@@ -223,6 +236,7 @@ def test_unplaced_minutes_when_cycle_capacity_is_exhausted():
         user_id=user_id,
         plan_cycle_id=cycle_id,
         remaining_minutes=total_cycle_capacity + 500,
+        deadline_at=None,
         created_at=_now(),
     )
     db.seed(huge_task)

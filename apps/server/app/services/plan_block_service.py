@@ -545,6 +545,15 @@ def _compute_planning_deadline_at(task: Task, cycle_end_at: datetime) -> datetim
     return min(task.deadline_at, cycle_end_at)
 
 
+def _compute_task_allocation_end_at(task: Task, cycle_end_at: datetime) -> datetime:
+    """Task가 실제로 시간을 사용할 수 있는 exclusive upper bound.
+
+    deadline이 없는 legacy Task는 cycle 끝까지 배치한다. deadline이 있으면 실제 시각과
+    cycle 끝 중 빠른 시각을 사용해 deadline 이후 분을 배치하지 않는다.
+    """
+    return min(task.deadline_at, cycle_end_at) if task.deadline_at is not None else cycle_end_at
+
+
 def compute_period_capacity(
     db: Session,
     *,
@@ -554,13 +563,17 @@ def compute_period_capacity(
     is_current_period: bool,
     now: datetime,
     checked_minutes: int = 0,
+    capacity_end_at: datetime | None = None,
 ) -> int:
     """미래/현재 분기의 신규 PLANNED 배치 가능 분을 계산한다(명세 11절 분기 용량 제약).
 
     - 미래 분기: max(0, 240 - 고정일정 합집합)
     - 현재 분기: min(remaining_capacity_by_limit, remaining_clock_available_minutes)
     """
-    window_start, window_end = _period_window(plan_date, period)
+    window_start, full_window_end = _period_window(plan_date, period)
+    window_end = min(full_window_end, capacity_end_at) if capacity_end_at is not None else full_window_end
+    if window_end <= window_start:
+        return 0
 
     fixed_schedules = (
         db.execute(
@@ -577,11 +590,13 @@ def compute_period_capacity(
 
     if not is_current_period:
         occupied = _union_minutes(intervals, window_start, window_end)
-        return max(0, _PERIOD_CAPACITY_MINUTES - occupied)
+        window_minutes = int((window_end - window_start).total_seconds() // 60)
+        return max(0, min(_PERIOD_CAPACITY_MINUTES, window_minutes) - occupied)
 
     full_period_occupied = _union_minutes(intervals, window_start, window_end)
+    window_minutes = int((window_end - window_start).total_seconds() // 60)
     remaining_capacity_by_limit = max(
-        0, _PERIOD_CAPACITY_MINUTES - checked_minutes - full_period_occupied
+        0, min(_PERIOD_CAPACITY_MINUTES, window_minutes) - checked_minutes - full_period_occupied
     )
 
     clock_start = max(now, window_start)
@@ -743,6 +758,19 @@ def _task_priority_key(task: Task, cycle_end_at: datetime):
     )
 
 
+def _distribute_daily_quotas(effective_need: int, eligible_dates: list[date]) -> dict[date, int]:
+    """오래된 날짜부터 integer remainder를 1분씩 부여한 균등 quota."""
+    if effective_need <= 0 or not eligible_dates:
+        return {}
+    base, remainder = divmod(effective_need, len(eligible_dates))
+    quotas = {
+        plan_date: base + (1 if index < remainder else 0)
+        for index, plan_date in enumerate(eligible_dates)
+    }
+    assert sum(quotas.values()) == effective_need
+    return quotas
+
+
 def schedule_plan_blocks(
     db: Session,
     *,
@@ -825,7 +853,63 @@ def schedule_plan_blocks(
 
     ordered_tasks = sorted(tasks, key=lambda task: _task_priority_key(task, cycle_end_at))
 
-    # 3. 현재 분기부터 cycle 종료까지 시간순으로 순회하며 그리디 배치
+    periods_by_date: dict[date, list[PlanPeriod]] = {}
+    for plan_date, period in _iter_periods_from(current_plan_date, current_period, cycle.end_date):
+        periods_by_date.setdefault(plan_date, []).append(period)
+
+    checked_minutes_cache: dict[tuple[date, PlanPeriod], int] = {}
+
+    def _checked_minutes_for(plan_date: date, period: PlanPeriod) -> int:
+        key = (plan_date, period)
+        if key not in checked_minutes_cache:
+            if plan_date != current_plan_date or period != current_period:
+                checked_minutes_cache[key] = 0
+            else:
+                rows = (
+                    db.execute(
+                        select(PlanBlock).where(
+                            PlanBlock.plan_cycle_id == plan_cycle_id,
+                            PlanBlock.plan_date == plan_date,
+                            PlanBlock.period == period,
+                            PlanBlock.status == PlanBlockStatus.CHECKED,
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                checked_minutes_cache[key] = sum(block.allocated_minutes for block in rows)
+        return checked_minutes_cache[key]
+
+    allocation_end_by_task = {
+        task.id: _compute_task_allocation_end_at(task, cycle_end_at) for task in ordered_tasks
+    }
+    daily_quotas_by_task: dict[uuid.UUID, dict[date, int]] = {}
+    for task in ordered_tasks:
+        allocation_end_at = allocation_end_by_task[task.id]
+        eligible_dates: list[date] = []
+        for plan_date, periods in periods_by_date.items():
+            raw_date_capacity = 0
+            for period in periods:
+                is_current = plan_date == current_plan_date and period == current_period
+                if is_current and has_current_checked.get(task.id):
+                    continue
+                raw_date_capacity += compute_period_capacity(
+                    db,
+                    user_id=user_id,
+                    plan_date=plan_date,
+                    period=period,
+                    is_current_period=is_current,
+                    now=now,
+                    checked_minutes=_checked_minutes_for(plan_date, period),
+                    capacity_end_at=allocation_end_at,
+                )
+            if raw_date_capacity > 0:
+                eligible_dates.append(plan_date)
+        daily_quotas_by_task[task.id] = _distribute_daily_quotas(
+            remaining_needs.get(task.id, 0), eligible_dates
+        )
+
+    # 3. 날짜별 quota와 순방향 carry를 지키며, 날짜 안에서는 기존 period/task 순서로 배치
     next_display_order: dict[tuple[date, PlanPeriod], int] = {}
 
     def _reserve_display_order(plan_date: date, period: PlanPeriod) -> int:
@@ -850,69 +934,88 @@ def schedule_plan_blocks(
 
     created_blocks: list[PlanBlock] = []
 
-    for plan_date, period in _iter_periods_from(current_plan_date, current_period, cycle.end_date):
-        is_current = plan_date == current_plan_date and period == current_period
-
-        checked_minutes = 0
-        if is_current:
-            period_checked_blocks = (
-                db.execute(
-                    select(PlanBlock).where(
-                        PlanBlock.plan_cycle_id == plan_cycle_id,
-                        PlanBlock.plan_date == plan_date,
-                        PlanBlock.period == period,
-                        PlanBlock.status == PlanBlockStatus.CHECKED,
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            checked_minutes = sum(block.allocated_minutes for block in period_checked_blocks)
-
-        available = compute_period_capacity(
-            db,
-            user_id=user_id,
-            plan_date=plan_date,
-            period=period,
-            is_current_period=is_current,
-            now=now,
-            checked_minutes=checked_minutes,
-        )
-        if available < 1:
-            continue
-
+    daily_carry = {task.id: 0 for task in ordered_tasks}
+    for plan_date, periods in periods_by_date.items():
+        daily_targets: dict[uuid.UUID, int] = {}
+        daily_allocated = {task.id: 0 for task in ordered_tasks}
         for task in ordered_tasks:
-            if available < 1:
-                break
-            need = remaining_needs.get(task.id, 0)
-            if need <= 0:
-                continue
-            if is_current and has_current_checked.get(task.id):
-                # 현재 분기에 이미 이 Task의 CHECKED 블록이 있다 — 같은 분기에 중복 배치하지
-                # 않고, 남은 필요 시간은 다음 분기부터 배치한다.
-                continue
+            quota = daily_quotas_by_task[task.id].get(plan_date)
+            if quota is not None:
+                daily_targets[task.id] = min(
+                    remaining_needs.get(task.id, 0), quota + daily_carry[task.id]
+                )
 
-            allocate = min(need, available)
-
-            new_block = PlanBlock(
-                id=uuid.uuid4(),
+        for period in periods:
+            is_current = plan_date == current_plan_date and period == current_period
+            checked_minutes = _checked_minutes_for(plan_date, period)
+            available = compute_period_capacity(
+                db,
                 user_id=user_id,
-                plan_cycle_id=plan_cycle_id,
-                task_id=task.id,
                 plan_date=plan_date,
                 period=period,
-                allocated_minutes=allocate,
-                allocated_amount_text=None,
-                display_title=_build_fallback_display_title(task),
-                display_order=_reserve_display_order(plan_date, period),
-                status=PlanBlockStatus.PLANNED,
-                rescheduled_from_block_id=None,
+                is_current_period=is_current,
+                now=now,
+                checked_minutes=checked_minutes,
             )
-            db.add(new_block)
-            created_blocks.append(new_block)
+            if available < 1:
+                continue
 
-            remaining_needs[task.id] = need - allocate
-            available -= allocate
+            newly_allocated_in_period = 0
+            for task in ordered_tasks:
+                if available < 1:
+                    break
+                need = remaining_needs.get(task.id, 0)
+                daily_remaining = daily_targets.get(task.id, 0) - daily_allocated[task.id]
+                if need <= 0 or daily_remaining <= 0:
+                    continue
+                if is_current and has_current_checked.get(task.id):
+                    continue
+
+                before_deadline_capacity = compute_period_capacity(
+                    db,
+                    user_id=user_id,
+                    plan_date=plan_date,
+                    period=period,
+                    is_current_period=is_current,
+                    now=now,
+                    checked_minutes=checked_minutes,
+                    capacity_end_at=allocation_end_by_task[task.id],
+                )
+                task_available = min(
+                    available, max(0, before_deadline_capacity - newly_allocated_in_period)
+                )
+                if task_available < 1:
+                    continue
+
+                allocate = min(need, daily_remaining, task_available)
+                if allocate < 1:
+                    continue
+
+                new_block = PlanBlock(
+                    id=uuid.uuid4(),
+                    user_id=user_id,
+                    plan_cycle_id=plan_cycle_id,
+                    task_id=task.id,
+                    plan_date=plan_date,
+                    period=period,
+                    allocated_minutes=allocate,
+                    allocated_amount_text=None,
+                    display_title=_build_fallback_display_title(task),
+                    display_order=_reserve_display_order(plan_date, period),
+                    status=PlanBlockStatus.PLANNED,
+                    rescheduled_from_block_id=None,
+                )
+                db.add(new_block)
+                created_blocks.append(new_block)
+
+                remaining_needs[task.id] = need - allocate
+                daily_allocated[task.id] += allocate
+                newly_allocated_in_period += allocate
+                available -= allocate
+
+        for task in ordered_tasks:
+            if task.id in daily_targets:
+                daily_carry[task.id] = daily_targets[task.id] - daily_allocated[task.id]
 
     db.flush()
 
