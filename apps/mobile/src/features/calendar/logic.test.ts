@@ -210,32 +210,67 @@ test('fixedSchedule만, CheckIn만 있는 날짜에는 점을 표시하고 완�
   assert.equal(isDayEmpty(empty), true);
 });
 
-test('완료 개수는 존재하는 CheckIn의 completedPlanCount 합계다', () => {
+test('완료 개수는 과거 COMPLETED와 현재 CHECKED만 합산하고 미래는 제외한다', () => {
   const day: CalendarDay = {
     date: '2026-07-25',
     periods: [
       makePeriod({
+        temporalState: 'PAST',
         checkIn: {
           id: 'a',
           score: 50,
           totalPlanCount: 3,
-          completedPlanCount: 1,
+          completedPlanCount: 99,
           finalizedAt: '2026-07-25T12:00:00+09:00',
         },
+        planBlocks: [
+          { id: 'past-completed', displayTitle: '완료', status: 'COMPLETED', displayOrder: 0 },
+          { id: 'past-not-done', displayTitle: '미완료', status: 'NOT_DONE', displayOrder: 1 },
+          { id: 'past-checked', displayTitle: '잘못 남은 체크', status: 'CHECKED', displayOrder: 2 },
+        ],
       }),
       makePeriod({
         period: 'AFTERNOON',
-        checkIn: {
-          id: 'b',
-          score: 100,
-          totalPlanCount: 2,
-          completedPlanCount: 2,
-          finalizedAt: '2026-07-25T18:00:00+09:00',
-        },
+        temporalState: 'CURRENT',
+        planBlocks: [
+          { id: 'current-checked', displayTitle: '오늘 체크', status: 'CHECKED', displayOrder: 0 },
+          { id: 'current-planned', displayTitle: '오늘 예정', status: 'PLANNED', displayOrder: 1 },
+        ],
+      }),
+      makePeriod({
+        period: 'EVENING',
+        temporalState: 'FUTURE',
+        planBlocks: [
+          { id: 'future-planned', displayTitle: '미래 예정', status: 'PLANNED', displayOrder: 0 },
+          { id: 'future-checked', displayTitle: '미래 비정상 체크', status: 'CHECKED', displayOrder: 1 },
+        ],
       }),
     ],
   };
-  assert.equal(getCompletedCount(day), 3);
+  assert.equal(getCompletedCount(day), 2);
+});
+
+test('현재 CHECKED 1개는 1개 완료이고 체크 해제 후 PLANNED이면 다시 0개다', () => {
+  const checkedDay: CalendarDay = {
+    date: '2026-07-25',
+    periods: [
+      makePeriod({
+        temporalState: 'CURRENT',
+        planBlocks: [{ id: 'today', displayTitle: '오늘 계획', status: 'CHECKED', displayOrder: 0 }],
+      }),
+    ],
+  };
+
+  assert.equal(getCompletedCount(checkedDay), 1);
+  assert.equal(
+    getCompletedCount({
+      ...checkedDay,
+      periods: [
+        { ...checkedDay.periods[0], planBlocks: [{ ...checkedDay.periods[0].planBlocks[0], status: 'PLANNED' }] },
+      ],
+    }),
+    0
+  );
 });
 
 test('고정 일정은 segmentStartAt 순으로 정렬하고 초를 제외한다', () => {

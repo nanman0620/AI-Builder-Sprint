@@ -16,7 +16,7 @@ import { ProgressBar } from '../components/progress-bar';
 import { ScoreGauge } from '../components/score-gauge';
 import { useHideTabBar } from '../hooks/use-hide-tab-bar';
 import { useHome } from '../hooks/use-home';
-import { formatPeriodLabel, resolveHomeMascotKey, resolveScoreBand, resolveVisibleHomeState, shouldHideTabBar, sortPlanBlocksByDisplayOrder } from '../logic';
+import { formatPeriodLabel, resolveHomeMascotKey, resolveProgressMascotBand, resolveScoreBand, resolveVisibleHomeState, shouldHideTabBar, sortPlanBlocksByDisplayOrder } from '../logic';
 import type { CheckInResult } from '../types';
 
 export function HomeScreen() {
@@ -158,7 +158,11 @@ export function HomeScreen() {
         }
       />
       {data.progress ? <ProgressBar percentage={data.progress.percentage} /> : null}
-      <HomeMascot mascotKey={resolveHomeMascotKey('IN_PROGRESS')} style={styles.centerMascot} />
+      {data.progress ? (
+        <ScoreMascot scoreBand={resolveProgressMascotBand(data.progress.percentage)} style={styles.centerMascot} />
+      ) : (
+        <HomeMascot mascotKey={resolveHomeMascotKey('IN_PROGRESS')} style={styles.centerMascot} />
+      )}
       <Text style={styles.sectionLabel}>지금 할 일</Text>
       {checkError ? <Text style={styles.error}>{checkError}</Text> : null}
       <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
