@@ -1563,6 +1563,7 @@ def add_solar_message(
                 ]
 
             call_ctx = {
+                "purpose": request.purpose,
                 "expected_action": action,
                 "expected_entity_type": entity_type,
                 "expected_target_kind": target_kind,
@@ -1584,6 +1585,7 @@ def add_solar_message(
                 candidate_tasks = []
                 candidate_fixed_schedules = []
             call_ctx = {
+                "purpose": request.purpose,
                 "cycle_start": cycle_start,
                 "cycle_end": cycle_end,
                 "candidate_tasks": candidate_tasks,
@@ -1608,7 +1610,7 @@ def add_solar_message(
             result = solar_client.analyze_unresolved_answer(
                 canonical_message,
                 now=now,
-                purpose=request.purpose,
+                purpose=call_ctx["purpose"],
                 expected_action=call_ctx["expected_action"],
                 expected_entity_type=call_ctx["expected_entity_type"],
                 expected_target_kind=call_ctx["expected_target_kind"],
@@ -1622,7 +1624,7 @@ def add_solar_message(
             result = solar_client.analyze_change_input(
                 canonical_message,
                 now=now,
-                purpose=request.purpose,
+                purpose=call_ctx["purpose"],
                 cycle_start=call_ctx["cycle_start"],
                 cycle_end=call_ctx["cycle_end"],
                 candidate_tasks=call_ctx["candidate_tasks"],
