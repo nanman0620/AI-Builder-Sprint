@@ -160,7 +160,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: TAB_BAR_DIVIDER_HEIGHT,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(61, 60, 60, 0.5)',
   },
 });
 
