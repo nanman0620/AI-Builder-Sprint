@@ -2,7 +2,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
-import type { SolarRequestItem } from '../types';
+import type { RequestItemSnapshot, SolarRequestItem } from '../types';
 import { getRequestItemCardDisplay } from './request-item-card-display';
 
 // 캡처(UI-014/UI-015)의 고정 일정 배지 색은 공용 디자인 토큰에 없어 이 컴포넌트에서만 쓴다.
@@ -10,7 +10,7 @@ const FIXED_SCHEDULE_BADGE_BACKGROUND = '#DBEAFE';
 const FIXED_SCHEDULE_BADGE_TEXT = '#2563EB';
 
 type RequestItemCardProps = {
-  item: SolarRequestItem;
+  item: SolarRequestItem | RequestItemSnapshot;
   highlighted?: boolean;
 };
 

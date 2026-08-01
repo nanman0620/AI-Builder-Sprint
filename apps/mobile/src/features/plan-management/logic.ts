@@ -6,25 +6,17 @@ import type {
   ExecutionSnapshot,
   ExecutionStatusResponse,
   PlanManagementState,
+  ConversationTimelineEntry,
+  RequestItemSnapshot,
   SolarRequest,
 } from './types';
 
 const CHANGE_CONFIRMATION_PROMPT_TYPE = 'CHANGE_CONFIRMATION';
 
 export function getVisibleConversationMessages(request: SolarRequest) {
-  const messages = [...request.messages].sort((a, b) => a.sequenceNo - b.sequenceNo);
+  const messages = getMessagesForCurrentConfirmationFlow(request);
   const prompt = request.decisionPrompt;
   if (!prompt) {
-    return messages;
-  }
-
-  const promptAlreadyPersisted = messages.some(
-    (message) =>
-      message.role === 'ASSISTANT' &&
-      message.kind === 'QUESTION' &&
-      message.metadata.promptType === CHANGE_CONFIRMATION_PROMPT_TYPE
-  );
-  if (promptAlreadyPersisted) {
     return messages;
   }
 
@@ -41,6 +33,126 @@ export function getVisibleConversationMessages(request: SolarRequest) {
       metadata: { promptType: CHANGE_CONFIRMATION_PROMPT_TYPE },
     },
   ];
+}
+
+function getMessagesForCurrentConfirmationFlow(request: SolarRequest) {
+  const messages = [...request.messages].sort(
+    (a, b) => a.sequenceNo - b.sequenceNo || a.id.localeCompare(b.id)
+  );
+  const completedPairs: {
+    questionId: string;
+    answerId: string;
+    keepInChangeInput: boolean;
+  }[] = [];
+
+  for (let index = 0; index < messages.length - 1; index += 1) {
+    const question = messages[index];
+    const answer = messages[index + 1];
+    if (
+      question.role !== 'ASSISTANT' ||
+      question.kind !== 'QUESTION' ||
+      question.metadata.promptType !== CHANGE_CONFIRMATION_PROMPT_TYPE ||
+      answer.role !== 'USER' ||
+      answer.kind !== 'DECISION' ||
+      answer.sequenceNo !== question.sequenceNo + 1
+    ) {
+      continue;
+    }
+    completedPairs.push({
+      questionId: question.id,
+      answerId: answer.id,
+      keepInChangeInput:
+        request.status === 'CHANGE_INPUT' &&
+        answer.metadata.decision === 'YES' &&
+        index + 1 === messages.length - 1,
+    });
+    index += 1;
+  }
+
+  const hiddenIds = new Set(
+    completedPairs
+      .filter((pair) => !pair.keepInChangeInput)
+      .flatMap((pair) => [pair.questionId, pair.answerId])
+  );
+  return messages.filter((message) => !hiddenIds.has(message.id));
+}
+
+const ITEM_ACTIONS = new Set(['CREATE', 'UPDATE', 'DELETE']);
+const ENTITY_TYPES = new Set(['TASK', 'FIXED_SCHEDULE']);
+const ITEM_STATUSES = new Set(['INFO_MISSING', 'READY', 'EXECUTED']);
+
+function parseRequestItemSnapshot(value: unknown): RequestItemSnapshot | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const stringFields = [
+    'snapshotId',
+    'requestItemId',
+    'actionLabel',
+    'entityLabel',
+    'statusLabel',
+    'title',
+    'summaryText',
+  ] as const;
+  if (stringFields.some((field) => typeof raw[field] !== 'string' || !raw[field])) return null;
+  if (!Number.isInteger(raw.itemOrder) || (raw.itemOrder as number) < 1) return null;
+  if (!ITEM_ACTIONS.has(String(raw.action))) return null;
+  if (!ENTITY_TYPES.has(String(raw.entityType))) return null;
+  if (!ITEM_STATUSES.has(String(raw.status))) return null;
+  if (!Array.isArray(raw.missingFields) || raw.missingFields.some((field) => typeof field !== 'string')) {
+    return null;
+  }
+  return raw as unknown as RequestItemSnapshot;
+}
+
+function getMessageSnapshots(message: SolarRequest['messages'][number]): RequestItemSnapshot[] {
+  if (message.metadata.snapshotVersion !== 1 || !Array.isArray(message.metadata.requestItemSnapshots)) {
+    return [];
+  }
+  return message.metadata.requestItemSnapshots
+    .map(parseRequestItemSnapshot)
+    .filter((snapshot): snapshot is RequestItemSnapshot => snapshot !== null)
+    .sort((a, b) => a.itemOrder - b.itemOrder || a.snapshotId.localeCompare(b.snapshotId));
+}
+
+export function buildConversationTimeline(request: SolarRequest): ConversationTimelineEntry[] {
+  const messages = getMessagesForCurrentConfirmationFlow(request);
+  const entries: ConversationTimelineEntry[] = [];
+  const seenSnapshotIds = new Set<string>();
+
+  for (const message of messages) {
+    entries.push({ type: 'MESSAGE', id: `message:${message.id}`, message });
+    for (const snapshot of getMessageSnapshots(message)) {
+      if (seenSnapshotIds.has(snapshot.snapshotId)) continue;
+      seenSnapshotIds.add(snapshot.snapshotId);
+      entries.push({
+        type: 'REQUEST_ITEM_SNAPSHOT',
+        id: `snapshot:${snapshot.snapshotId}`,
+        snapshot,
+      });
+    }
+  }
+
+  if (seenSnapshotIds.size === 0 && request.requestItems.length > 0) {
+    const currentItems = [...request.requestItems].sort(
+      (a, b) => a.itemOrder - b.itemOrder || a.id.localeCompare(b.id)
+    );
+    for (const item of currentItems) {
+      entries.push({
+        type: 'LEGACY_CURRENT_REQUEST_ITEM',
+        id: `legacy-current:${request.id}:${item.id}`,
+        item,
+      });
+    }
+  }
+
+  if (request.decisionPrompt) {
+    entries.push({
+      type: 'DECISION_PROMPT',
+      id: `decision-prompt:${request.id}`,
+      message: request.decisionPrompt.message,
+    });
+  }
+  return entries;
 }
 
 // 서버 execution_result에 실제로 저장되는 6개 원본 key.

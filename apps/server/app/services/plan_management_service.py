@@ -289,6 +289,29 @@ def _build_item_detail(item: SolarRequestItem) -> SolarRequestItemDetail:
     )
 
 
+def build_request_item_snapshot_value(item: SolarRequestItem) -> dict:
+    """현재 item의 카드 표시값을 immutable message metadata DTO로 만든다.
+
+    snapshotId는 저장 turn마다 새로 발급해야 하므로 호출자가 추가한다. 나머지 값은 현재
+    requestItems 응답과 같은 단일 표시 규칙(_build_item_detail)을 재사용한다.
+    """
+    detail = _build_item_detail(item)
+    summary_text = "삭제 예정" if item.action == SolarAction.DELETE else detail.summary_text
+    return {
+        "requestItemId": str(item.id),
+        "itemOrder": item.item_order,
+        "action": item.action.value,
+        "actionLabel": detail.action_label,
+        "entityType": item.entity_type.value,
+        "entityLabel": detail.entity_label,
+        "status": item.status.value,
+        "statusLabel": detail.status_label,
+        "title": detail.title,
+        "summaryText": summary_text,
+        "missingFields": list(item.missing_fields) if isinstance(item.missing_fields, list) else [],
+    }
+
+
 # ---------------------------------------------------------------------------
 # 현재 질문(currentQuestion)/quickReplies/inputPlaceholder 계산
 # ---------------------------------------------------------------------------

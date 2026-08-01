@@ -62,7 +62,7 @@ const styles = StyleSheet.create({
     minHeight: 40,
     maxHeight: 120,
 
-    fontSize: 15,
+    fontSize: 16,
     lineHeight: 20,
 
     textAlignVertical: 'center',

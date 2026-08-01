@@ -1,4 +1,4 @@
-import type { SolarRequestItem } from '../types';
+import type { RequestItemSnapshot, SolarRequestItem } from '../types';
 
 export type RequestItemCardDisplay = {
   badgeLabel: string;
@@ -6,7 +6,9 @@ export type RequestItemCardDisplay = {
   isDelete: boolean;
 };
 
-export function getRequestItemCardDisplay(item: SolarRequestItem): RequestItemCardDisplay {
+export function getRequestItemCardDisplay(
+  item: SolarRequestItem | RequestItemSnapshot
+): RequestItemCardDisplay {
   if (item.action === 'DELETE') {
     return {
       badgeLabel: item.actionLabel,

@@ -486,6 +486,12 @@ def test_create_solar_request_new_cycle_create_success_is_change_confirmation(
     assert assistant_message.kind == SolarMessageKind.TEXT
     assert assistant_message.client_event_id is None
     assert assistant_message.sequence_no == 2
+    assert assistant_message.message_metadata["snapshotVersion"] == 1
+    snapshot = assistant_message.message_metadata["requestItemSnapshots"][0]
+    assert snapshot["requestItemId"] == str(item_obj.id)
+    assert snapshot["itemOrder"] == 1
+    assert snapshot["status"] == "READY"
+    assert uuid.UUID(snapshot["snapshotId"])
 
 
 def test_create_solar_request_collecting_adds_question_message(monkeypatch, patch_plan_management_state):
@@ -514,7 +520,12 @@ def test_create_solar_request_collecting_adds_question_message(monkeypatch, patc
     assert request_obj.current_item_order == 1
     assert len(fake_db.added) == 1 + 1 + 3
 
+    analysis_message = fake_db.added[-2]
     question_message = fake_db.added[-1]
+    snapshot = analysis_message.message_metadata["requestItemSnapshots"][0]
+    assert analysis_message.sequence_no == 2
+    assert snapshot["status"] == "INFO_MISSING"
+    assert snapshot["missingFields"] == ["deadlineAt", "estimatedMinutes", "amount"]
     assert question_message.kind == SolarMessageKind.QUESTION
     assert question_message.sequence_no == 3
     assert question_message.content == "마감이 언제인가요?"
