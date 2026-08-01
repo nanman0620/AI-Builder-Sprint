@@ -77,7 +77,11 @@ export function resolveScoreBand(score: number): ScoreBand {
   return 'SCORE_00';
 }
 
-export function resolveCheckInFeedback(score: number): string {
+export function resolveCheckInFeedback(score: number, cycleEnded: boolean): string {
+  if (cycleEnded) {
+    return '7일의 계획이 모두 끝났어요';
+  }
+
   const scoreBand = resolveScoreBand(score);
 
   if (scoreBand === 'SCORE_100') {

@@ -212,7 +212,7 @@ function CheckInResultBody({
             {nickname ? `${nickname}님의 ${periodLabel} 결과` : `${periodLabel} 결과`}
           </Text>
           <Text style={[styles.bodyHeadline, styles.resultHeaderTitleText]}>
-            {resolveCheckInFeedback(result.score)}
+            {resolveCheckInFeedback(result.score, result.cycleEnded)}
           </Text>
         </View>
         <CircularGauge value={result.score} size={88} />
