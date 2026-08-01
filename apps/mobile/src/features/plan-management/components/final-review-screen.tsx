@@ -79,6 +79,7 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     padding: spacing.lg,
     borderTopWidth: 1,
+    paddingBottom: spacing.xl +10,
     borderTopColor: colors.border,
   },
   button: {

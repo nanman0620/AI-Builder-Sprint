@@ -110,7 +110,7 @@ export function HomeScreen() {
           <View style={styles.centerBody}>
             <HomeMascot
               mascotKey={resolveHomeMascotKey('NO_ACTIVE_CYCLE')}
-              size={340}
+              size={290}
               style={styles.centerMascot}
             />
             <Text style={styles.bodyHeadline}>아직 오늘 계획이 없어요.</Text>
@@ -247,7 +247,7 @@ const styles = StyleSheet.create({
   },
   centerMascot: {
     alignSelf: 'center',
-    marginVertical: spacing.lg,
+    marginVertical: -40,
   },
   bodyHeadline: {
     ...typography.title,
@@ -280,7 +280,8 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: spacing.md,
     marginHorizontal: spacing.lg,
-    marginBottom: spacing.lg,
+    marginTop: -80,
+    marginBottom: 190,
     alignItems: 'center',
   },
   outlineButtonText: {

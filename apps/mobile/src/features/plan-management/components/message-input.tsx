@@ -31,6 +31,7 @@ export function MessageInput({
         placeholderTextColor={colors.textSecondary}
         editable={!disabled}
         multiline
+        numberOfLines={1}
       />
       <Pressable
         style={[styles.sendButton, !canSubmit && styles.sendButtonDisabled]}
@@ -54,10 +55,20 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
     backgroundColor: colors.background,
-    marginBottom: PLAN_COMPOSER_BOTTOM_OFFSET,
+    marginBottom: PLAN_COMPOSER_BOTTOM_OFFSET - 4,
   },
   input: {
     flex: 1,
+    minHeight: 40,
+    maxHeight: 120,
+
+    fontSize: 15,
+    lineHeight: 20,
+
+    textAlignVertical: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: 20,
@@ -65,6 +76,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     minHeight: 40,
     maxHeight: 120,
+    borderRadius: 24,
     color: colors.text,
     fontFamily: fonts.regular,
     fontSize: 14,

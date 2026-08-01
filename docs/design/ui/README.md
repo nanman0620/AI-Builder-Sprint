@@ -4,7 +4,7 @@
 
 - `screens/`: 최종 화면의 시각 배치·스타일 참고용 캡처
 - `reference-only/`: 버튼·입력창·탭·게이지 등 코드 컴포넌트 참고용 조각
-- `apps/mobile/assets/brand/`: 앱 bundle에서 실제로 사용할 수 있는 로고·마스코트 PNG. CheckIn 점수별 마스코트 네 장 포함
+- `apps/mobile/assets/brand/`: 앱 bundle에서 실제로 사용할 수 있는 로고·마스코트 PNG와 승인된 상점 진입 아이콘. CheckIn 점수별 마스코트 네 장 포함
 
 화면과 상태의 전체 매핑은 상위 `UI_REFERENCE.md`를 따른다.
 
@@ -23,5 +23,5 @@
 - 30점은 표정 선택 전용, 60점은 결과 피드백 문구 선택 전용, 100점은 최고 단계 마스코트 선택 전용이며, 실제 재계획 여부는 `NOT_DONE` 존재 여부로 결정한다. 100점도 `score >= 60`의 기존 긍정적 피드백을 사용한다.
 - 하단 탭과 표준 아이콘은 프로젝트가 채택한 아이콘 컴포넌트를 사용한다.
 - 카카오 로그인 표시는 캡처를 잘라 쓰지 않고 공식 로그인 UI 또는 코드 컴포넌트를 사용한다.
-- 로고와 마스코트만 `apps/mobile/assets/brand/`에서 사용한다.
+- 로고와 마스코트, `shop-entry-icon.png` 예외 자산만 `apps/mobile/assets/brand/`에서 사용한다. 상점 아이콘은 안내 모달 전용이며 Route·API와 연결하지 않는다.
 - Safe Area와 native status bar를 사용하며 535px 캡처 크기를 고정 화면 폭으로 사용하지 않는다.

@@ -82,9 +82,12 @@ const styles = StyleSheet.create({
   },
   description: {
     ...typography.caption,
+    fontSize: 15,
+    lineHeight: 21,
     color: colors.textSecondary,
     textAlign: 'center',
     marginTop: spacing.md,
+    paddingHorizontal: spacing.md,
   },
   error: {
     ...typography.caption,

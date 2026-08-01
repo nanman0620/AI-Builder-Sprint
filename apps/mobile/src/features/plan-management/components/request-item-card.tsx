@@ -3,6 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
 import type { SolarRequestItem } from '../types';
+import { getRequestItemCardDisplay } from './request-item-card-display';
 
 // 캡처(UI-014/UI-015)의 고정 일정 배지 색은 공용 디자인 토큰에 없어 이 컴포넌트에서만 쓴다.
 const FIXED_SCHEDULE_BADGE_BACKGROUND = '#DBEAFE';
@@ -18,6 +19,7 @@ type RequestItemCardProps = {
 export function RequestItemCard({ item, highlighted = false }: RequestItemCardProps) {
   const isInfoMissing = item.status === 'INFO_MISSING';
   const isFixedSchedule = item.entityType === 'FIXED_SCHEDULE';
+  const display = getRequestItemCardDisplay(item);
 
   return (
     <View style={[styles.card, highlighted && styles.cardHighlighted]}>
@@ -28,15 +30,32 @@ export function RequestItemCard({ item, highlighted = false }: RequestItemCardPr
         <View
           style={[
             styles.badge,
-            { backgroundColor: isFixedSchedule ? FIXED_SCHEDULE_BADGE_BACKGROUND : colors.primarySoft },
+            {
+              backgroundColor: display.isDelete
+                ? `${colors.error}1A`
+                : isFixedSchedule
+                  ? FIXED_SCHEDULE_BADGE_BACKGROUND
+                  : colors.primarySoft,
+            },
           ]}>
           <Text
-            style={[styles.badgeText, { color: isFixedSchedule ? FIXED_SCHEDULE_BADGE_TEXT : colors.primary }]}>
-            {item.entityLabel}
+            style={[
+              styles.badgeText,
+              {
+                color: display.isDelete
+                  ? colors.error
+                  : isFixedSchedule
+                    ? FIXED_SCHEDULE_BADGE_TEXT
+                    : colors.primary,
+              },
+            ]}>
+            {display.badgeLabel}
           </Text>
         </View>
       </View>
-      <Text style={[styles.statusLine, isInfoMissing && styles.statusLineError]}>{item.summaryText}</Text>
+      <Text style={[styles.statusLine, (isInfoMissing || display.isDelete) && styles.statusLineError]}>
+        {display.summaryText}
+      </Text>
     </View>
   );
 }
