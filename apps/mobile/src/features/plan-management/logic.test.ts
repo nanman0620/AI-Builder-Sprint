@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import {
   applyAcknowledgeResult,
   computeExecutionCompletedResult,
+  getVisibleConversationMessages,
   normalizeExecutionStatusResponse,
   normalizePlanManagementState,
   type RawExecutionResult,
@@ -14,7 +15,131 @@ import type {
   AcknowledgeExecutionResultResponse,
   ExecutionStatusResponse,
   PlanManagementState,
+  SolarRequest,
 } from './types';
+
+function makeRequest(overrides: Partial<SolarRequest> = {}): SolarRequest {
+  return {
+    id: 'request-1',
+    purpose: 'NEW_CYCLE',
+    status: 'CHANGE_CONFIRMATION',
+    messages: [],
+    requestItems: [],
+    currentQuestion: null,
+    quickReplies: [],
+    inputPlaceholder: null,
+    pendingItemId: null,
+    decisionPrompt: {
+      message: '추가하거나 수정할 내용이 있나요?',
+      options: [
+        { value: 'YES', label: '예' },
+        { value: 'NO', label: '아니요' },
+      ],
+    },
+    reviewSummary: null,
+    execution: null,
+    ...overrides,
+  };
+}
+
+test('pending decision question is shown once with its selection UI source intact', () => {
+  const request = makeRequest();
+  const messages = getVisibleConversationMessages(request);
+
+  assert.deepEqual(messages.map((message) => message.content), ['추가하거나 수정할 내용이 있나요?']);
+  assert.equal(request.decisionPrompt?.options.length, 2);
+});
+
+test('failed selection keeps the previous pending question and options available for retry', () => {
+  const previousRequest = makeRequest();
+
+  assert.deepEqual(
+    getVisibleConversationMessages(previousRequest).map((message) => message.content),
+    ['추가하거나 수정할 내용이 있나요?']
+  );
+  assert.deepEqual(previousRequest.decisionPrompt?.options.map((option) => option.value), [
+    'YES',
+    'NO',
+  ]);
+});
+
+for (const [decision, label, status] of [
+  ['YES', '예', 'CHANGE_INPUT'],
+  ['NO', '아니요', 'FINAL_REVIEW'],
+] as const) {
+  test(`${decision} response keeps one question and one answer after transition`, () => {
+    const request = makeRequest({
+      status,
+      decisionPrompt: null,
+      messages: [
+        {
+          id: 'question-1',
+          role: 'ASSISTANT',
+          kind: 'QUESTION',
+          content: '추가하거나 수정할 내용이 있나요?',
+          sequenceNo: 2,
+          createdAt: '',
+          metadata: { promptType: 'CHANGE_CONFIRMATION', decisionClientEventId: 'event-1' },
+        },
+        {
+          id: 'answer-1',
+          role: 'USER',
+          kind: 'DECISION',
+          content: label,
+          sequenceNo: 3,
+          createdAt: '',
+          metadata: { decision },
+        },
+      ],
+    });
+
+    assert.deepEqual(
+      getVisibleConversationMessages(request).map((message) => message.content),
+      ['추가하거나 수정할 내용이 있나요?', label]
+    );
+    assert.equal(request.decisionPrompt, null);
+  });
+}
+
+test('persisted prompt identifier prevents duplicate rendering after a refetch', () => {
+  const request = makeRequest({
+    messages: [
+      {
+        id: 'question-1',
+        role: 'ASSISTANT',
+        kind: 'QUESTION',
+        content: '추가하거나 수정할 내용이 있나요?',
+        sequenceNo: 1,
+        createdAt: '',
+        metadata: { promptType: 'CHANGE_CONFIRMATION' },
+      },
+    ],
+  });
+
+  assert.equal(getVisibleConversationMessages(request).length, 1);
+});
+
+test('non-decision pending questions remain ordinary history messages', () => {
+  const request = makeRequest({
+    status: 'COLLECTING',
+    decisionPrompt: null,
+    messages: [
+      {
+        id: 'question-2',
+        role: 'ASSISTANT',
+        kind: 'QUESTION',
+        content: '마감일은 언제인가요?',
+        sequenceNo: 1,
+        createdAt: '',
+        metadata: { itemId: 'item-1', field: 'deadlineAt' },
+      },
+    ],
+  });
+
+  assert.deepEqual(getVisibleConversationMessages(request).map((message) => message.content), [
+    '마감일은 언제인가요?',
+  ]);
+});
 
 function makeRaw(overrides: Partial<RawExecutionResult> = {}): RawExecutionResult {
   return {

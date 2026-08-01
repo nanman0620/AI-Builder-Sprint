@@ -11,6 +11,7 @@ import {
 
 import { colors, spacing, typography } from '@/src/constants/tokens';
 
+import { getVisibleConversationMessages } from '../logic';
 import type { SolarRequest } from '../types';
 import { ChatMessageBubble } from './chat-message-bubble';
 import { MessageInput } from './message-input';
@@ -35,7 +36,7 @@ export function CollectingScreen({ request, isSubmitting, actionError, onSendMes
   const scrollViewRef = useRef<ScrollView>(null);
 
   const sortedItems = [...request.requestItems].sort((a, b) => a.itemOrder - b.itemOrder);
-  const sortedMessages = [...request.messages].sort((a, b) => a.sequenceNo - b.sequenceNo);
+  const sortedMessages = getVisibleConversationMessages(request);
 
   useEffect(() => {
     scrollViewRef.current?.scrollToEnd({ animated: true });

@@ -3,6 +3,7 @@ import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleShe
 
 import { colors, spacing, typography } from '@/src/constants/tokens';
 
+import { getVisibleConversationMessages } from '../logic';
 import type { SolarRequest } from '../types';
 import { ChatMessageBubble } from './chat-message-bubble';
 import { MessageInput } from './message-input';
@@ -18,7 +19,7 @@ type ChangeInputScreenProps = {
 export function ChangeInputScreen({ request, isSubmitting, actionError, onSendMessage }: ChangeInputScreenProps) {
   const [value, setValue] = useState('');
   const sortedItems = [...request.requestItems].sort((a, b) => a.itemOrder - b.itemOrder);
-  const sortedMessages = [...request.messages].sort((a, b) => a.sequenceNo - b.sequenceNo);
+  const sortedMessages = getVisibleConversationMessages(request);
 
   const handleSubmit = () => {
     const trimmed = value.trim();

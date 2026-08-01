@@ -102,6 +102,7 @@ export type ChatMessage = {
   content: string;
   sequenceNo: number;
   createdAt: string;
+  metadata: Record<string, unknown>;
 };
 
 export type ItemAction = 'CREATE' | 'UPDATE' | 'DELETE';
