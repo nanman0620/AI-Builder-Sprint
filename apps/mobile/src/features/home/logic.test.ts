@@ -10,6 +10,7 @@ import {
   formatPeriodLabel,
   PlanBlockPendingRegistry,
   replacePlanBlock,
+  resolveCheckInFeedback,
   resolveHomeMascotKey,
   resolveProgressMascotBand,
   resolveScoreBand,
@@ -100,13 +101,21 @@ test('점수 구간 경계값이 정확히 나뉜다', () => {
 });
 
 test('CheckIn 결과 문구가 점수 구간 경계마다 정확히 바뀐다', () => {
-  assert.equal(resolveCheckInFeedback(0), '0점, 괜찮아요\n다음 계획부터 다시 이으면 돼요');
-  assert.equal(resolveCheckInFeedback(29), '29점, 괜찮아요\n다음 계획부터 다시 이으면 돼요');
-  assert.equal(resolveCheckInFeedback(30), '30점, 작지만 분명하게 이어왔어요');
-  assert.equal(resolveCheckInFeedback(59), '59점, 작지만 분명하게 이어왔어요');
-  assert.equal(resolveCheckInFeedback(60), '60점, 충분히 잘 이어왔어요');
-  assert.equal(resolveCheckInFeedback(99), '99점, 충분히 잘 이어왔어요');
-  assert.equal(resolveCheckInFeedback(100), '100점, 오늘의 계획을 모두 이어냈어요!');
+  assert.equal(resolveCheckInFeedback(0, false), '0점, 괜찮아요\n다음 계획부터 다시 이으면 돼요');
+  assert.equal(resolveCheckInFeedback(29, false), '29점, 괜찮아요\n다음 계획부터 다시 이으면 돼요');
+  assert.equal(resolveCheckInFeedback(30, false), '30점, 작지만 분명하게 이어왔어요');
+  assert.equal(resolveCheckInFeedback(59, false), '59점, 작지만 분명하게 이어왔어요');
+  assert.equal(resolveCheckInFeedback(60, false), '60점, 충분히 잘 이어왔어요');
+  assert.equal(resolveCheckInFeedback(99, false), '99점, 충분히 잘 이어왔어요');
+  assert.equal(resolveCheckInFeedback(100, false), '100점, 오늘의 계획을 모두 이어냈어요!');
+});
+
+test('cycle이 끝나면 점수와 관계없이 7일 계획 종료 문구가 우선한다', () => {
+  const cycleEndMessage = '7일의 계획이 모두 끝났어요';
+  assert.equal(resolveCheckInFeedback(0, true), cycleEndMessage);
+  assert.equal(resolveCheckInFeedback(30, true), cycleEndMessage);
+  assert.equal(resolveCheckInFeedback(60, true), cycleEndMessage);
+  assert.equal(resolveCheckInFeedback(100, true), cycleEndMessage);
 });
 
 test('홈 진행률 경계값이 0·30·60·100 단계 마스코트에 정확히 매핑된다', () => {
