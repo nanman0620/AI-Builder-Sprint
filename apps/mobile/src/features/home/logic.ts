@@ -144,8 +144,44 @@ export function applyOptimisticCheckState(
   );
 }
 
+export function replacePlanBlock(
+  planBlocks: HomePlanBlock[],
+  replacement: HomePlanBlock
+): HomePlanBlock[] {
+  return planBlocks.map((block) => (block.id === replacement.id ? replacement : block));
+}
+
+export class PlanBlockPendingRegistry {
+  private readonly tokens = new Map<string, symbol>();
+
+  begin(planBlockId: string): symbol | null {
+    if (this.tokens.has(planBlockId)) {
+      return null;
+    }
+    const token = Symbol(planBlockId);
+    this.tokens.set(planBlockId, token);
+    return token;
+  }
+
+  owns(planBlockId: string, token: symbol): boolean {
+    return this.tokens.get(planBlockId) === token;
+  }
+
+  finish(planBlockId: string, token: symbol): boolean {
+    if (!this.owns(planBlockId, token)) {
+      return false;
+    }
+    this.tokens.delete(planBlockId);
+    return true;
+  }
+
+  clear(): void {
+    this.tokens.clear();
+  }
+}
+
 // docs/ai/IMPLEMENTATION_CONTEXT.md 8절 "진행률": 완료 개수/전체 개수(=PLANNED+CHECKED), 시간 비율이 아니다.
-// 서버 응답이 오기 전까지의 로컬 예측치이며, 성공 응답이 오면 서버 progress로 덮어쓴다.
+// optimistic 상태와 ID별 서버 응답 병합 뒤 모두 같은 계산을 사용해 병렬 응답 순서와 무관하게 유지한다.
 export function computeOptimisticProgress(planBlocks: HomePlanBlock[]): HomeProgress {
   const totalCount = planBlocks.length;
   const checkedCount = planBlocks.filter((block) => block.status === 'CHECKED').length;

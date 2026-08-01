@@ -75,6 +75,14 @@ test('legacy current item은 공용 카드 정책으로 렌더링한다', () => 
   assert.match(conversationTimelineSource, /<RequestItemCard key=\{entry\.id\} item=\{entry\.item\} \/>/);
 });
 
+test('질문 대상 안내는 카드가 아니라 별도 assistant 말풍선으로 렌더링한다', () => {
+  assert.match(conversationTimelineSource, /entry\.type === 'QUESTION_TARGET_INTRO'/);
+  assert.match(
+    conversationTimelineSource,
+    /entry\.type === 'QUESTION_TARGET_INTRO'[\s\S]*?<ChatMessageBubble[\s\S]*?kind: 'TEXT',[\s\S]*?content: entry\.message/
+  );
+});
+
 test('서버 screenMode가 CHANGE_INPUT, FINAL_REVIEW, EXECUTING 전용 화면을 선택한다', () => {
   assert.match(
     planManagementScreenSource,

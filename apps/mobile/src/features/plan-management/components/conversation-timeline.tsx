@@ -23,6 +23,22 @@ export function ConversationTimeline({ entries }: ConversationTimelineProps) {
         if (entry.type === 'LEGACY_CURRENT_REQUEST_ITEM') {
           return <RequestItemCard key={entry.id} item={entry.item} />;
         }
+        if (entry.type === 'QUESTION_TARGET_INTRO') {
+          return (
+            <ChatMessageBubble
+              key={entry.id}
+              message={{
+                id: entry.id,
+                role: 'ASSISTANT',
+                kind: 'TEXT',
+                content: entry.message,
+                sequenceNo: Number.MAX_SAFE_INTEGER,
+                createdAt: '',
+                metadata: { itemId: entry.requestItemId },
+              }}
+            />
+          );
+        }
         return (
           <ChatMessageBubble
             key={entry.id}
