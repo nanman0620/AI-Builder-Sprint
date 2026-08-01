@@ -1,12 +1,31 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import Svg, { Path } from 'react-native-svg';
 
-import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
-import { AuthSubmitButton } from '@/src/features/auth/components/auth-submit-button';
+import { colors, fonts } from '@/src/constants/tokens';
 import { useAppSync } from '@/src/features/app-sync/app-sync-context';
 import { signOut } from '@/src/features/auth/services/auth-service';
 import { useBootstrap } from '@/src/features/bootstrap/bootstrap-context';
+
+const mascotSad = require('@/assets/brand/mascot-sad.png');
+
+const TEXT = '#1D1D23';
+const PURPLE = '#D791FF';
+const BUTTON_BORDER = '#E6E1E9';
+
+function ChevronLeftIcon({ size = 14, color = TEXT }: { size?: number; color?: string }) {
+  const width = (size * 7.44075) / 13.8577;
+  return (
+    <Svg width={width} height={size} viewBox="0 0 7.44075 13.8577">
+      <Path
+        d="M1.56769 6.93183L7.21725 12.5814C7.36625 12.7304 7.43888 12.9058 7.43513 13.1077C7.43125 13.3097 7.35481 13.4852 7.20581 13.6342C7.05669 13.7832 6.88119 13.8577 6.67931 13.8577C6.47744 13.8577 6.30194 13.7832 6.15281 13.6342L0.399563 7.8924C0.263938 7.75677 0.163438 7.60483 0.0980627 7.43658C0.0326877 7.26833 0 7.10008 0 6.93183C0 6.76358 0.0326877 6.59533 0.0980627 6.42708C0.163438 6.25883 0.263938 6.1069 0.399563 5.97127L6.15281 0.217835C6.30194 0.0688345 6.47938 -0.00372767 6.68513 0.000147333C6.89088 0.00402233 7.06825 0.0804595 7.21725 0.229459C7.36625 0.378459 7.44075 0.55396 7.44075 0.75596C7.44075 0.957835 7.36625 1.13327 7.21725 1.28227L1.56769 6.93183Z"
+        fill={color}
+      />
+    </Svg>
+  );
+}
 
 export default function AccountWithdrawalScreen() {
   const router = useRouter();
@@ -14,7 +33,7 @@ export default function AccountWithdrawalScreen() {
   const { reset: resetBootstrap } = useBootstrap();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  async function handleCancel() {
+  function handleBack() {
     router.back();
   }
 
@@ -42,77 +61,113 @@ export default function AccountWithdrawalScreen() {
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-      <View style={styles.card}>
-        <Text style={styles.title}>정말 회원탈퇴하시겠어요?</Text>
-        <Text style={styles.description}>
-          회원탈퇴를 진행하면
-          {'\n'}현재 계정에서 로그아웃됩니다.
+    <SafeAreaView style={styles.safeArea} edges={['top']}>
+      <View style={styles.header}>
+        <Pressable onPress={handleBack} style={styles.backButton} hitSlop={8} disabled={isSubmitting}>
+          <ChevronLeftIcon size={14} color={TEXT} />
+        </Pressable>
+        <Text style={styles.headerTitle}>회원 탈퇴</Text>
+      </View>
+
+      <View style={styles.body}>
+        <Text style={styles.title}>
+          탈퇴하신다니 정말 아쉬워요{'\n'}정말 탈퇴하시겠어요?
         </Text>
-        <Text style={styles.note}>
-          해커톤 MVP에서는 실제 계정과
-          {'\n'}서버 데이터는 삭제되지 않습니다.
-        </Text>
-        <View style={styles.buttonColumn}>
-          <Pressable style={[styles.cancelButton, styles.cancelMargin]} onPress={handleCancel} disabled={isSubmitting}>
-            <Text style={styles.cancelText}>취소</Text>
+        <Image source={mascotSad} style={styles.mascot} resizeMode="contain" />
+        <View style={styles.buttonRow}>
+          <Pressable
+            style={[styles.yesButton, isSubmitting ? styles.buttonDisabled : null]}
+            onPress={handleWithdraw}
+            disabled={isSubmitting}>
+            <Text style={styles.yesButtonText}>네</Text>
           </Pressable>
-          <AuthSubmitButton label="회원탈퇴" onPress={handleWithdraw} loading={isSubmitting} />
+          <Pressable style={styles.noButton} onPress={handleBack} disabled={isSubmitting}>
+            <Text style={styles.noButtonText}>아니요</Text>
+          </Pressable>
         </View>
       </View>
-    </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flexGrow: 1,
+  safeArea: {
+    flex: 1,
     backgroundColor: colors.background,
-    padding: spacing.lg,
-    justifyContent: 'center',
   },
-  card: {
-    backgroundColor: colors.background,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.lg,
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: 0.72,
+    borderBottomColor: BUTTON_BORDER,
+  },
+  backButton: {
+    position: 'absolute',
+    left: 20,
+    zIndex: 1,
+    padding: 4,
+  },
+  headerTitle: {
+    flex: 1,
+    fontSize: 15,
+    fontFamily: fonts.bold,
+    color: TEXT,
+    textAlign: 'center',
+  },
+  body: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 35,
   },
   title: {
-    ...typography.title,
-    color: colors.text,
-    marginBottom: spacing.sm,
-  },
-  description: {
-    ...typography.body,
-    color: colors.textSecondary,
-    lineHeight: 22,
-    marginBottom: spacing.md,
-  },
-  note: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    lineHeight: 20,
-    marginBottom: spacing.lg,
-  },
-  buttonColumn: {
-    flexDirection: 'column',
-    justifyContent: 'center',
-  },
-  cancelMargin: {
-    marginBottom: spacing.sm,
-  },
-  cancelButton: {
-    height: 46,
-    borderRadius: 12,
-    backgroundColor: colors.border,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: spacing.sm,
-  },
-  cancelText: {
-    ...typography.body,
+    fontSize: 20,
     fontFamily: fonts.bold,
-    color: colors.text,
+    color: TEXT,
+    textAlign: 'center',
+  },
+  mascot: {
+    width: 160,
+    height: 160,
+    marginTop: 32,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: 16,
+    width: '100%',
+    marginTop: 48,
+  },
+  yesButton: {
+    flex: 1,
+    height: 44,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: BUTTON_BORDER,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  yesButtonText: {
+    fontSize: 16,
+    fontFamily: fonts.bold,
+    color: TEXT,
+  },
+  noButton: {
+    flex: 1,
+    height: 44,
+    borderRadius: 8,
+    backgroundColor: PURPLE,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  noButtonText: {
+    fontSize: 16,
+    fontFamily: fonts.bold,
+    color: '#FFFFFF',
+  },
+  buttonDisabled: {
+    opacity: 0.6,
   },
 });
