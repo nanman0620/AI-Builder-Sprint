@@ -187,6 +187,69 @@ def test_system_prompt_includes_required_key_table_self_check_and_examples():
     assert "예시 2" in system_prompt
 
 
+def test_system_prompt_requires_title_amount_text_deduplication():
+    """title에 amountText/deadlineAt/estimatedMinutes/remainingMinutes를 중복해 넣지 않는
+    규칙, 고유 번호 보존, 모호할 때 확인 질문 유지, CREATE/UPDATE 공통 적용, self-check
+    강화, few-shot 예시가 모두 시스템 프롬프트에 포함돼 있는지 확인한다."""
+    messages = solar_client._build_prompt_messages(
+        "테스트 메시지",
+        now=datetime(2026, 7, 31, 14, 0, tzinfo=timezone.utc),
+        purpose=SolarRequestPurpose.NEW_CYCLE,
+        cycle_start=None,
+        cycle_end=None,
+        candidate_tasks=[],
+        candidate_fixed_schedules=[],
+    )
+    system_prompt = messages[0]["content"]
+
+    # 1. title/amountText 역할 구분 규칙
+    assert "TASK title과 amountText의 역할 구분" in system_prompt
+    assert "title은 사용자가 해야 할 일을 식별하는 간결한 작업명" in system_prompt
+
+    # 2. title에서 마감·예상 시간·남은 시간을 중복하지 않는 규칙
+    assert (
+        "amountText로 담을 전체 분량, deadlineAt으로 담을 마감, estimatedMinutes/"
+        "remainingMinutes로 담을 예상·남은 시간을 title에 중복해서 넣지 마세요" in system_prompt
+    )
+
+    # 3. 숫자를 무조건 제거하지 않는 보호 규칙(고유 번호 보존)
+    assert "그 작업을 다른 것과 구분 짓는 고유 정보" in system_prompt
+    assert "2차 과제" in system_prompt and "3분 스피치" in system_prompt and "문제 3 풀이" in system_prompt
+
+    # 4. 모호한 경우 확인 질문을 사용한다는 지침
+    assert (
+        "숫자가 분량인지 고유 식별 정보인지 문맥만으로 확정할 수 없으면" in system_prompt
+    )
+    assert "pendingQuestion 흐름으로 확인" in system_prompt
+
+    # CREATE/UPDATE 공통 적용 근거
+    assert (
+        "action=\"CREATE\"뿐 아니라 action=\"UPDATE\"로 title을 새로 채울 때도" in system_prompt
+    )
+
+    # 5. 자료구조·영단어·책 읽기 few-shot 예시
+    assert "예시 3" in system_prompt
+    assert "자료구조 과제 3문제를 수요일까지 풀어야 해" in system_prompt
+    assert "title=\"자료구조 과제\", amountText=\"3문제\"" in system_prompt
+    assert "금지: title=\"자료구조 과제 3문제 풀기\"" in system_prompt
+    assert "영단어 30개 외우기" in system_prompt
+    assert "title=\"영단어 암기\", amountText=\"30개\"" in system_prompt
+    assert "책 50페이지 읽기" in system_prompt
+    assert "title=\"책 읽기\", amountText=\"50페이지\"" in system_prompt
+
+    # 6. 고유 번호 보존 예시
+    assert "운영체제 과제 2번 제출하기" in system_prompt
+    assert "title=\"운영체제 과제 2번 제출\"로 그대로 두고 amountText는" in system_prompt
+
+    # 모호해서 확인 질문이 필요한 예시
+    assert "숫자가 분량인지 고유 번호인지 문맥만으로 알 수 없으면" in system_prompt
+
+    # 7. self-check에 title/amountText 중복 확인 단계 추가
+    assert "아래 6가지" in system_prompt
+    assert "6. TASK CREATE/UPDATE에서 title을 채웠다면" in system_prompt
+    assert "이미 분리한 분량·마감·시간 표현이 중복으로 남아있지 않은지" in system_prompt
+
+
 def test_parse_rejects_missing_without_pending_question():
     item_raw = _task_create_item(
         deadlineAt=None, estimatedMinutes=None, estimatedMinutesSource=None, amountText=None, amountSource=None

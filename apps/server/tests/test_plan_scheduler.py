@@ -4,9 +4,14 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.models.enums import PlanPeriod
+from app.models.enums import AmountSource, PlanPeriod
 from app.services import plan_block_service as svc
-from tests.support_scheduler import FakeSchedulerSession, make_cycle, make_task
+from tests.support_scheduler import (
+    FakeSchedulerSession,
+    make_cycle,
+    make_fixed_schedule,
+    make_task,
+)
 
 SEOUL = ZoneInfo("Asia/Seoul")
 
@@ -203,3 +208,259 @@ def test_task_with_zero_remaining_minutes_is_not_scheduled():
 
     assert result.created_blocks == []
     assert result.total_unplaced_minutes == 0
+
+
+# ---------------------------------------------------------------------------
+# 분량 배분 fallback (SOLAR 연동 전 제한적 MVP 규칙)
+# ---------------------------------------------------------------------------
+
+
+def test_single_block_full_placement_applies_task_amount_text_fallback():
+    user_id, cycle_id, db = _setup()
+    task = make_task(
+        user_id=user_id,
+        plan_cycle_id=cycle_id,
+        remaining_minutes=60,
+        title="자료구조 과제",
+        amount_text="2문제",
+        amount_source=AmountSource.USER,
+        created_at=_now(),
+    )
+    db.seed(task)
+
+    result = svc.schedule_plan_blocks(db, user_id=user_id, plan_cycle_id=cycle_id, now=_now())
+
+    assert len(result.created_blocks) == 1
+    block = result.created_blocks[0]
+    assert block.allocated_amount_text == "2문제"
+    assert block.display_title == "자료구조 과제 2문제"
+    assert result.total_unplaced_minutes == 0
+
+
+def test_two_blocks_distribute_amount_by_minutes_ratio():
+    """예시 1: 3개 / 120분·60분 -> 2개·1개."""
+    user_id, cycle_id, db = _setup()
+    # MORNING 용량을 120분으로 제한해(04-12시 창에서 120분 고정 일정 점유) 나머지 60분이
+    # AFTERNOON으로 넘어가도록 강제한다.
+    fixed = make_fixed_schedule(
+        user_id=user_id,
+        plan_cycle_id=cycle_id,
+        start_at=datetime(2026, 7, 29, 8, 0, tzinfo=SEOUL),
+        end_at=datetime(2026, 7, 29, 10, 0, tzinfo=SEOUL),
+    )
+    task = make_task(
+        user_id=user_id,
+        plan_cycle_id=cycle_id,
+        remaining_minutes=180,
+        title="한문 과제",
+        amount_text="3개",
+        amount_source=AmountSource.USER,
+        created_at=_now(),
+    )
+    db.seed(task, fixed)
+
+    result = svc.schedule_plan_blocks(db, user_id=user_id, plan_cycle_id=cycle_id, now=_now())
+
+    assert len(result.created_blocks) == 2
+    assert result.total_unplaced_minutes == 0
+    morning = next(b for b in result.created_blocks if b.period == PlanPeriod.MORNING)
+    afternoon = next(b for b in result.created_blocks if b.period == PlanPeriod.AFTERNOON)
+    assert morning.allocated_minutes == 120
+    assert afternoon.allocated_minutes == 60
+    assert morning.allocated_amount_text == "2개"
+    assert morning.display_title == "한문 과제 2개"
+    assert afternoon.allocated_amount_text == "1개"
+    assert afternoon.display_title == "한문 과제 1개"
+    # 여러 블록에 Task 전체 amount_text("3개")가 반복 복사되지 않는다.
+    assert "3개" not in morning.display_title
+    assert "3개" not in afternoon.display_title
+
+
+def test_three_blocks_distribute_amount_by_minutes_ratio():
+    """예시 2: 8문제 / 60분·60분·120분 -> 2문제·2문제·4문제."""
+    user_id, cycle_id, db = _setup()
+    # MORNING·AFTERNOON 용량을 각각 60분으로 제한해(각 창에서 180분씩 고정 일정 점유),
+    # 남은 120분이 EVENING으로 넘어가도록 강제한다.
+    morning_fixed = make_fixed_schedule(
+        user_id=user_id,
+        plan_cycle_id=cycle_id,
+        start_at=datetime(2026, 7, 29, 6, 0, tzinfo=SEOUL),
+        end_at=datetime(2026, 7, 29, 9, 0, tzinfo=SEOUL),
+    )
+    afternoon_fixed = make_fixed_schedule(
+        user_id=user_id,
+        plan_cycle_id=cycle_id,
+        start_at=datetime(2026, 7, 29, 12, 0, tzinfo=SEOUL),
+        end_at=datetime(2026, 7, 29, 15, 0, tzinfo=SEOUL),
+    )
+    task = make_task(
+        user_id=user_id,
+        plan_cycle_id=cycle_id,
+        remaining_minutes=240,
+        title="자료구조 과제",
+        amount_text="8문제",
+        amount_source=AmountSource.USER,
+        created_at=_now(),
+    )
+    db.seed(task, morning_fixed, afternoon_fixed)
+
+    result = svc.schedule_plan_blocks(db, user_id=user_id, plan_cycle_id=cycle_id, now=_now())
+
+    assert len(result.created_blocks) == 3
+    assert result.total_unplaced_minutes == 0
+    by_period = {b.period: b for b in result.created_blocks}
+    assert by_period[PlanPeriod.MORNING].allocated_minutes == 60
+    assert by_period[PlanPeriod.AFTERNOON].allocated_minutes == 60
+    assert by_period[PlanPeriod.EVENING].allocated_minutes == 120
+    assert by_period[PlanPeriod.MORNING].allocated_amount_text == "2문제"
+    assert by_period[PlanPeriod.AFTERNOON].allocated_amount_text == "2문제"
+    assert by_period[PlanPeriod.EVENING].allocated_amount_text == "4문제"
+    total_quantity = sum(
+        int(b.allocated_amount_text.removesuffix("문제")) for b in result.created_blocks
+    )
+    assert total_quantity == 8
+
+
+def test_remainder_tie_break_is_deterministic_by_chronological_order():
+    """예시 4: 5문제 / 60분씩 3개 분기 -> 몫이 모두 동률(1문제)일 때 이른 시간순으로
+    나머지 2를 먼저 배정해 2문제·2문제·1문제가 된다."""
+    user_id, cycle_id, db = _setup()
+    morning_fixed = make_fixed_schedule(
+        user_id=user_id,
+        plan_cycle_id=cycle_id,
+        start_at=datetime(2026, 7, 29, 6, 0, tzinfo=SEOUL),
+        end_at=datetime(2026, 7, 29, 9, 0, tzinfo=SEOUL),
+    )
+    afternoon_fixed = make_fixed_schedule(
+        user_id=user_id,
+        plan_cycle_id=cycle_id,
+        start_at=datetime(2026, 7, 29, 12, 0, tzinfo=SEOUL),
+        end_at=datetime(2026, 7, 29, 15, 0, tzinfo=SEOUL),
+    )
+    task = make_task(
+        user_id=user_id,
+        plan_cycle_id=cycle_id,
+        remaining_minutes=180,
+        title="수학 문제",
+        amount_text="5문제",
+        amount_source=AmountSource.USER,
+        created_at=_now(),
+    )
+    db.seed(task, morning_fixed, afternoon_fixed)
+
+    result = svc.schedule_plan_blocks(db, user_id=user_id, plan_cycle_id=cycle_id, now=_now())
+
+    assert len(result.created_blocks) == 3
+    by_period = {b.period: b for b in result.created_blocks}
+    assert by_period[PlanPeriod.MORNING].allocated_minutes == 60
+    assert by_period[PlanPeriod.AFTERNOON].allocated_minutes == 60
+    assert by_period[PlanPeriod.EVENING].allocated_minutes == 60
+    assert by_period[PlanPeriod.MORNING].allocated_amount_text == "2문제"
+    assert by_period[PlanPeriod.AFTERNOON].allocated_amount_text == "2문제"
+    assert by_period[PlanPeriod.EVENING].allocated_amount_text == "1문제"
+
+
+def test_quantity_less_than_block_count_keeps_all_blocks_title_only():
+    """예시 5: 전체 수량(2개)보다 신규 블록 수(3개)가 많으면 0개를 만들지 않고
+    Task의 신규 블록 전체를 title-only fallback으로 유지한다."""
+    user_id, cycle_id, db = _setup()
+    morning_fixed = make_fixed_schedule(
+        user_id=user_id,
+        plan_cycle_id=cycle_id,
+        start_at=datetime(2026, 7, 29, 6, 0, tzinfo=SEOUL),
+        end_at=datetime(2026, 7, 29, 9, 0, tzinfo=SEOUL),
+    )
+    afternoon_fixed = make_fixed_schedule(
+        user_id=user_id,
+        plan_cycle_id=cycle_id,
+        start_at=datetime(2026, 7, 29, 12, 0, tzinfo=SEOUL),
+        end_at=datetime(2026, 7, 29, 15, 0, tzinfo=SEOUL),
+    )
+    task = make_task(
+        user_id=user_id,
+        plan_cycle_id=cycle_id,
+        remaining_minutes=180,
+        title="한문 과제",
+        amount_text="2개",
+        amount_source=AmountSource.USER,
+        created_at=_now(),
+    )
+    db.seed(task, morning_fixed, afternoon_fixed)
+
+    result = svc.schedule_plan_blocks(db, user_id=user_id, plan_cycle_id=cycle_id, now=_now())
+
+    assert len(result.created_blocks) == 3
+    for block in result.created_blocks:
+        assert block.allocated_amount_text is None
+        assert block.display_title == "한문 과제"
+
+
+def test_single_block_with_leftover_unplaced_keeps_title_only_fallback():
+    user_id = uuid.uuid4()
+    cycle_id = uuid.uuid4()
+    # cycle이 당일 하루뿐이고 now가 마지막 분기(EVENING)이므로 이번 호출에서는 분기가
+    # 1개만 순회되어, 남는 시간이 있어도 신규 블록은 정확히 1개만 생성된다.
+    cycle = make_cycle(
+        user_id=user_id, start_date=date(2026, 7, 29), end_date=date(2026, 7, 29), id=cycle_id
+    )
+    db = FakeSchedulerSession().seed(cycle)
+    now = datetime(2026, 7, 29, 19, 0, tzinfo=SEOUL)
+    task = make_task(
+        user_id=user_id,
+        plan_cycle_id=cycle_id,
+        remaining_minutes=300,
+        title="자료구조 과제",
+        amount_text="6문제",
+        amount_source=AmountSource.USER,
+        created_at=now,
+    )
+    db.seed(task)
+
+    result = svc.schedule_plan_blocks(db, user_id=user_id, plan_cycle_id=cycle_id, now=now)
+
+    assert len(result.created_blocks) == 1
+    block = result.created_blocks[0]
+    assert block.allocated_minutes == 240
+    assert result.unplaced_minutes[task.id] == 60
+    assert block.allocated_amount_text is None
+    assert block.display_title == "자료구조 과제"
+
+
+def test_single_block_without_amount_text_keeps_title_only_fallback():
+    user_id, cycle_id, db = _setup()
+    task = make_task(
+        user_id=user_id,
+        plan_cycle_id=cycle_id,
+        remaining_minutes=60,
+        title="산책",
+        created_at=_now(),
+    )
+    db.seed(task)
+
+    result = svc.schedule_plan_blocks(db, user_id=user_id, plan_cycle_id=cycle_id, now=_now())
+
+    assert len(result.created_blocks) == 1
+    block = result.created_blocks[0]
+    assert block.allocated_amount_text is None
+    assert block.display_title == "산책"
+
+
+def test_single_block_with_blank_amount_text_keeps_title_only_fallback():
+    user_id, cycle_id, db = _setup()
+    task = make_task(
+        user_id=user_id,
+        plan_cycle_id=cycle_id,
+        remaining_minutes=60,
+        title="산책",
+        amount_text="   ",
+        amount_source=AmountSource.USER,
+        created_at=_now(),
+    )
+    db.seed(task)
+
+    result = svc.schedule_plan_blocks(db, user_id=user_id, plan_cycle_id=cycle_id, now=_now())
+
+    assert len(result.created_blocks) == 1
+    block = result.created_blocks[0]
+    assert block.allocated_amount_text is None
+    assert block.display_title == "산책"

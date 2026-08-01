@@ -1,3 +1,4 @@
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -599,6 +600,78 @@ def _build_fallback_display_title(task: Task) -> str:
     return task.title
 
 
+# "3개"/"8문제"처럼 공백 없는 양의 정수+단위 형식만 인식한다. "문제 5개"(단위가 앞),
+# "약 3개"(수식어), "2~3개"(범위), "0개"/"-3개"(선행 0·부호), "3개 정도"(꼬리말)처럼
+# 숫자·단위를 안전하게 분리할 수 없는 형식은 모두 매치되지 않는다.
+_AMOUNT_TEXT_PATTERN = re.compile(r"^\s*([1-9]\d*)\s*([^\d\s]+)\s*$")
+
+
+def _parse_amount_quantity(amount_text: str) -> tuple[int, str] | None:
+    match = _AMOUNT_TEXT_PATTERN.match(amount_text)
+    if match is None:
+        return None
+    return int(match.group(1)), match.group(2)
+
+
+def _apply_amount_distribution_fallback(
+    created_blocks: list[PlanBlock],
+    tasks_by_id: dict[uuid.UUID, Task],
+    unplaced_minutes: dict[uuid.UUID, int],
+    tasks_with_checked_or_completed_history: set[uuid.UUID],
+) -> None:
+    """SOLAR가 PlanBlock별 분량을 결정하기 전까지 쓰는 제한적 MVP fallback.
+
+    Task.amount_text는 항상 "Task 전체 분량"이며, 이미 CHECKED/COMPLETED된 몫이 그
+    전체 중 얼마였는지 계산할 별도 구조가 없다(시간 비율로 역산하지 않는다). 그래서
+    해당 Task에 CHECKED 또는 COMPLETED PlanBlock이 하나라도 존재하면 이번 신규 블록에
+    분량을 배정하지 않는다(NOT_DONE은 완료되지 않은 시도라 이력에서 제외한다). 마찬가지로
+    이번 호출에서 Task의 필요 시간을 다 배치하지 못했다면(unplaced_minutes > 0) 지금
+    만든 블록들이 Task 전체를 대표하지 않으므로 배정하지 않는다.
+
+    위 조건을 통과하고 amount_text가 "3개"처럼 명확한 정수+단위로 파싱되며 그 수량이
+    이번에 생성된 블록 수 이상일 때만, allocated_minutes 비율 기준 largest remainder
+    방식으로 정수 수량을 배분한다(정수 연산만 사용해 항상 같은 결과를 재현한다). 조건을
+    하나라도 만족하지 못하면 그 Task의 신규 블록 전체를 기존 title-only fallback으로
+    남겨 둔다 — 일부 블록만 분량을 배정하는 혼합 상태는 만들지 않는다.
+    """
+    blocks_by_task: dict[uuid.UUID, list[PlanBlock]] = {}
+    for block in created_blocks:
+        blocks_by_task.setdefault(block.task_id, []).append(block)
+
+    for task_id, blocks in blocks_by_task.items():
+        if unplaced_minutes.get(task_id, 0) != 0:
+            continue
+        if task_id in tasks_with_checked_or_completed_history:
+            continue
+
+        task = tasks_by_id[task_id]
+        if task.amount_text is None:
+            continue
+        parsed = _parse_amount_quantity(task.amount_text)
+        if parsed is None:
+            continue
+        quantity, unit = parsed
+        if quantity < len(blocks):
+            continue
+
+        ordered_blocks = sorted(
+            blocks, key=lambda b: (b.plan_date, _PERIOD_ORDER[b.period], b.display_order)
+        )
+        total_minutes = sum(b.allocated_minutes for b in ordered_blocks)
+
+        shares = [(quantity * b.allocated_minutes) // total_minutes for b in ordered_blocks]
+        remainders = [(quantity * b.allocated_minutes) % total_minutes for b in ordered_blocks]
+        leftover = quantity - sum(shares)
+
+        priority = sorted(range(len(ordered_blocks)), key=lambda i: (-remainders[i], i))
+        for i in priority[:leftover]:
+            shares[i] += 1
+
+        for block, count in zip(ordered_blocks, shares):
+            block.allocated_amount_text = f"{count}{unit}"
+            block.display_title = f"{task.title} {count}{unit}"
+
+
 @dataclass(frozen=True)
 class ScheduleResult:
     created_blocks: list[PlanBlock]
@@ -795,6 +868,32 @@ def schedule_plan_blocks(
 
     unplaced_minutes = {task_id: need for task_id, need in remaining_needs.items() if need > 0}
     total_unplaced_minutes = sum(unplaced_minutes.values())
+
+    # 4. 분량 배분 fallback: CHECKED/COMPLETED 이력이 있는 Task는 amount_text가 이미
+    #    "Task 전체 분량"을 가리키지 않게 되므로(그 중 얼마가 끝났는지 계산할 구조가 없음)
+    #    이번 신규 블록에서 제외한다. NOT_DONE은 완료된 적이 없으므로 이력에 포함하지 않는다.
+    candidate_task_ids = {block.task_id for block in created_blocks}
+    tasks_with_checked_or_completed_history: set[uuid.UUID] = set()
+    if candidate_task_ids:
+        history_blocks = (
+            db.execute(
+                select(PlanBlock).where(
+                    PlanBlock.task_id.in_(candidate_task_ids),
+                    PlanBlock.status.in_([PlanBlockStatus.CHECKED, PlanBlockStatus.COMPLETED]),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        tasks_with_checked_or_completed_history = {block.task_id for block in history_blocks}
+
+    tasks_by_id = {task.id: task for task in tasks}
+    _apply_amount_distribution_fallback(
+        created_blocks,
+        tasks_by_id,
+        unplaced_minutes,
+        tasks_with_checked_or_completed_history,
+    )
 
     return ScheduleResult(
         created_blocks=created_blocks,

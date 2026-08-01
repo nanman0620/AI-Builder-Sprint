@@ -436,6 +436,25 @@ def test_uses_common_plan_block_scheduling_service(monkeypatch):
     assert blocks[0].plan_cycle_id == cycle.id
 
 
+def test_single_block_display_title_uses_task_amount_text_when_fully_placed():
+    """NEW_CYCLE도 ACTIVE_CYCLE과 동일한 공용 schedule_plan_blocks()를 쓰므로, Task가
+    신규 블록 1개로 남김없이 배치되면 같은 제한적 MVP fallback이 적용된다."""
+    user_id, request, db, session = _setup()
+    payload = make_task_payload(
+        title="자료구조 과제", estimated_minutes=60, amount_text="2문제", amount_source="USER",
+    )
+    item = make_task_item(user_id=user_id, solar_request_id=request.id, item_order=1, payload=payload)
+    db.seed(item)
+
+    with session.begin():
+        svc.execute_new_cycle(session, request)
+
+    blocks = db.all_rows(PlanBlock)
+    assert len(blocks) == 1
+    assert blocks[0].allocated_amount_text == "2문제"
+    assert blocks[0].display_title == "자료구조 과제 2문제"
+
+
 # ---------------------------------------------------------------------------
 # 실행 직전/직후 동시성 재확인
 # ---------------------------------------------------------------------------
