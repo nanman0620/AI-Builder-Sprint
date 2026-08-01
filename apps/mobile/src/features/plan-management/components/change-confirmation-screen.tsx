@@ -1,7 +1,8 @@
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
+import { colors, spacing, typography } from '@/src/constants/tokens';
 
+import { getVisibleConversationMessages } from '../logic';
 import type { DecisionOption, SolarRequest } from '../types';
 import { ChatMessageBubble } from './chat-message-bubble';
 import { RequestItemCard } from './request-item-card';
@@ -20,7 +21,7 @@ export function ChangeConfirmationScreen({
   onDecision,
 }: ChangeConfirmationScreenProps) {
   const sortedItems = [...request.requestItems].sort((a, b) => a.itemOrder - b.itemOrder);
-  const sortedMessages = [...request.messages].sort((a, b) => a.sequenceNo - b.sequenceNo);
+  const sortedMessages = getVisibleConversationMessages(request);
   const prompt = request.decisionPrompt;
 
   return (
@@ -36,7 +37,6 @@ export function ChangeConfirmationScreen({
           <ChatMessageBubble key={message.id} message={message} />
         ))}
       </View>
-      <Text style={styles.prompt}>{prompt?.message ?? '수정하거나 추가할 내용이 있나요?'}</Text>
       <View style={styles.options}>
         {prompt?.options.map((option) => (
           <Pressable
@@ -67,15 +67,6 @@ const styles = StyleSheet.create({
   },
   messages: {
     gap: spacing.sm,
-  },
-  prompt: {
-    ...typography.body,
-    color: colors.text,
-    fontFamily: fonts.semiBold,
-    backgroundColor: colors.primarySoft,
-    borderRadius: 12,
-    padding: spacing.md,
-    marginTop: spacing.md,
   },
   options: {
     flexDirection: 'row',

@@ -136,6 +136,26 @@ def test_resolve_current_request_screen_mode_maps_each_in_progress_status():
         assert solar_request_service.resolve_current_request_screen_mode(request) == screen_mode
 
 
+@pytest.mark.parametrize(("decision", "label"), [("YES", "예"), ("NO", "아니요")])
+def test_build_decision_history_entries_preserves_question_before_answer(decision, label):
+    entries = solar_request_service._build_decision_history_entries(
+        client_event_id="decision-event-id",
+        decision=decision,
+        decision_label=label,
+        prompt_message="다른 선택형 질문인가요?",
+    )
+
+    assert [(entry["role"], entry["kind"], entry["content"]) for entry in entries] == [
+        (SolarMessageRole.ASSISTANT, SolarMessageKind.QUESTION, "다른 선택형 질문인가요?"),
+        (SolarMessageRole.USER, SolarMessageKind.DECISION, label),
+    ]
+    assert entries[0]["message_metadata"] == {
+        "promptType": "CHANGE_CONFIRMATION",
+        "decisionClientEventId": "decision-event-id",
+    }
+    assert entries[1]["message_metadata"] == {"decision": decision}
+
+
 def test_resolve_current_request_screen_mode_maps_completed_to_execution_success():
     request = _make_request(
         status=SolarRequestStatus.COMPLETED,

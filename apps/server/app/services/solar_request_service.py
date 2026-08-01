@@ -1470,6 +1470,27 @@ def _assistant_question_entry(content: str, metadata: dict) -> dict:
     }
 
 
+def _build_decision_history_entries(
+    *, client_event_id: str, decision: str, decision_label: str, prompt_message: str
+) -> list[dict]:
+    return [
+        _assistant_question_entry(
+            prompt_message,
+            {
+                "promptType": "CHANGE_CONFIRMATION",
+                "decisionClientEventId": client_event_id,
+            },
+        ),
+        {
+            "client_event_id": client_event_id,
+            "role": SolarMessageRole.USER,
+            "kind": SolarMessageKind.DECISION,
+            "content": decision_label,
+            "message_metadata": {"decision": decision},
+        },
+    ]
+
+
 def add_solar_message(
     db: Session,
     *,
@@ -1792,27 +1813,30 @@ def add_solar_decision(
         if request.status != SolarRequestStatus.CHANGE_CONFIRMATION:
             raise ApiError(409, CODE_INVALID_REQUEST_STATE, "지금은 확인할 수 없는 상태예요.")
 
+        from app.services import plan_management_service
+
+        prompt = plan_management_service._build_decision_prompt(request.status)
+        if prompt is None:
+            raise ApiError(409, CODE_INVALID_REQUEST_STATE, "Decision prompt is unavailable.")
+        decision_content = next(
+            (option.label for option in prompt.options if option.value == decision),
+            decision,
+        )
+
         if decision == "YES":
             request.status = SolarRequestStatus.CHANGE_INPUT
-            decision_content = "네"
         else:
             request.status = SolarRequestStatus.FINAL_REVIEW
             request.confirmed_at = now
-            decision_content = "아니요"
         request.current_item_order = None
 
-        entries = [
-            {
-                "client_event_id": canonical_client_event_id,
-                "role": SolarMessageRole.USER,
-                "kind": SolarMessageKind.DECISION,
-                "content": decision_content,
-                "message_metadata": {"decision": decision},
-            }
-        ]
+        entries = _build_decision_history_entries(
+            client_event_id=canonical_client_event_id,
+            decision=decision,
+            decision_label=decision_content,
+            prompt_message=prompt.message,
+        )
         _persist_ordered_messages(db, user_id=user_id, request=request, entries=entries)
-
-        from app.services import plan_management_service
 
         return plan_management_service.get_solar_request_detail_state(db, user_id, request.id)
 

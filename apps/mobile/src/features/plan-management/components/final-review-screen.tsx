@@ -3,7 +3,9 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { ErrorView } from '@/src/components/common/error-view';
 import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
+import { getVisibleConversationMessages } from '../logic';
 import type { SolarRequest } from '../types';
+import { ChatMessageBubble } from './chat-message-bubble';
 import { RequestItemCard } from './request-item-card';
 
 type FinalReviewScreenProps = {
@@ -24,6 +26,7 @@ export function FinalReviewScreen({
   onExecute,
 }: FinalReviewScreenProps) {
   const sortedItems = request ? [...request.requestItems].sort((a, b) => a.itemOrder - b.itemOrder) : [];
+  const sortedMessages = request ? getVisibleConversationMessages(request) : [];
 
   if (!request || sortedItems.length === 0) {
     return <ErrorView onRetry={onReload} />;
@@ -33,6 +36,11 @@ export function FinalReviewScreen({
     <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.title}>할 일 및 고정 일정 등록</Text>
+        <View style={styles.messages}>
+          {sortedMessages.map((message) => (
+            <ChatMessageBubble key={message.id} message={message} />
+          ))}
+        </View>
         {sortedItems.map((item) => (
           <RequestItemCard key={item.id} item={item} />
         ))}
@@ -67,6 +75,10 @@ const styles = StyleSheet.create({
   title: {
     ...typography.title,
     color: colors.text,
+    marginBottom: spacing.lg,
+  },
+  messages: {
+    gap: spacing.sm,
     marginBottom: spacing.lg,
   },
   error: {

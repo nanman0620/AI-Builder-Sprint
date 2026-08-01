@@ -6,7 +6,42 @@ import type {
   ExecutionSnapshot,
   ExecutionStatusResponse,
   PlanManagementState,
+  SolarRequest,
 } from './types';
+
+const CHANGE_CONFIRMATION_PROMPT_TYPE = 'CHANGE_CONFIRMATION';
+
+export function getVisibleConversationMessages(request: SolarRequest) {
+  const messages = [...request.messages].sort((a, b) => a.sequenceNo - b.sequenceNo);
+  const prompt = request.decisionPrompt;
+  if (!prompt) {
+    return messages;
+  }
+
+  const promptAlreadyPersisted = messages.some(
+    (message) =>
+      message.role === 'ASSISTANT' &&
+      message.kind === 'QUESTION' &&
+      message.metadata.promptType === CHANGE_CONFIRMATION_PROMPT_TYPE
+  );
+  if (promptAlreadyPersisted) {
+    return messages;
+  }
+
+  const lastSequenceNo = messages.at(-1)?.sequenceNo ?? 0;
+  return [
+    ...messages,
+    {
+      id: `decision-prompt:${request.id}`,
+      role: 'ASSISTANT' as const,
+      kind: 'QUESTION' as const,
+      content: prompt.message,
+      sequenceNo: lastSequenceNo + 1,
+      createdAt: '',
+      metadata: { promptType: CHANGE_CONFIRMATION_PROMPT_TYPE },
+    },
+  ];
+}
 
 // 서버 execution_result에 실제로 저장되는 6개 원본 key.
 // docs/database/이음_MVP_최종_DB_구조.pdf의 execution_result 절: taskCount·fixedScheduleCount는
