@@ -806,6 +806,25 @@ test('대상 모호성, CHANGE_DETAILS, 저장·합성 decision prompt에는 안
   assert.equal(timeline.filter((entry) => entry.type === 'DECISION_PROMPT').length, 1);
 });
 
+test('반복 미지원 특수 질문은 카드 질문 intro나 세션을 만들지 않는다', () => {
+  const request = makeRequest({ status: 'COLLECTING', decisionPrompt: null, messages: [
+    messageWithSnapshots('analysis', 1, '분석', [snapshot()]),
+    {
+      id: 'unsupported-recurrence', role: 'ASSISTANT', kind: 'QUESTION',
+      content: '반복 계획은 아직 지원하지 않아요.', sequenceNo: 2, createdAt: '',
+      metadata: { followUpType: 'UNSUPPORTED_TASK_RECURRENCE', itemId: 'item-1', field: 'unsupportedRecurrence' },
+    },
+  ] });
+
+  const timeline = buildConversationTimeline(request);
+
+  assert.equal(timeline.filter((entry) => entry.type === 'QUESTION_TARGET_INTRO').length, 0);
+  assert.equal(
+    timeline.filter((entry) => entry.type === 'MESSAGE' && entry.message.id === 'unsupported-recurrence').length,
+    1,
+  );
+});
+
 test('동일 payload 재구성은 안정적인 intro ID와 중복 없는 timeline을 만든다', () => {
   const request = makeRequest({ status: 'COLLECTING', decisionPrompt: null, messages: [
     messageWithSnapshots('analysis', 1, '분석', [snapshot()]),

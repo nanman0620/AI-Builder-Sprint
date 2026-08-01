@@ -632,6 +632,31 @@ def test_resolve_message_dispatch_change_details_kind():
     assert dispatch.kind == "CHANGE_DETAILS"
 
 
+def test_resolve_message_dispatch_unsupported_task_recurrence_kind():
+    request = _make_request(status=SolarRequestStatus.COLLECTING, current_item_order=1)
+    card = _make_item(
+        item_order=1,
+        action="CREATE",
+        status="INFO_MISSING",
+        normalized_payload={"_unsupportedIntent": "RECURRING_TASK"},
+    )
+    special = _make_message(
+        sequence_no=5,
+        role=SolarMessageRole.ASSISTANT,
+        kind=SolarMessageKind.QUESTION,
+        metadata={
+            "followUpType": "UNSUPPORTED_TASK_RECURRENCE",
+            "itemId": str(card.id),
+            "field": "unsupportedRecurrence",
+        },
+    )
+
+    dispatch = solar_request_service._resolve_message_dispatch(request, [card], [special])
+
+    assert dispatch.kind == "UNSUPPORTED_TASK_RECURRENCE"
+    assert dispatch.special_message is special
+
+
 def test_resolve_message_dispatch_falls_back_to_card():
     request = _make_request(status=SolarRequestStatus.COLLECTING, current_item_order=1)
     card = _make_item(

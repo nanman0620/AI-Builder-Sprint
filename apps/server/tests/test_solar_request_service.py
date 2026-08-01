@@ -533,6 +533,47 @@ def test_create_solar_request_collecting_adds_question_message(monkeypatch, patc
     assert question_message.message_metadata["itemId"] == str(fake_db.added[1].id)
 
 
+def test_create_recurring_task_stays_collecting_and_clears_occurrence_values(
+    monkeypatch, patch_plan_management_state
+):
+    item = _create_item(
+        raw_line_text="매일 영어 단어 20개씩 외울래",
+        normalized_payload={
+            "title": "영어 단어 암기",
+            "deadlineAt": "2026-08-31T23:59:59+09:00",
+            "estimatedMinutes": 20,
+            "estimatedMinutesSource": "USER",
+            "remainingMinutes": None,
+            "amountText": "20개",
+            "amountSource": "USER",
+        },
+        unsupported_intent="RECURRING_TASK",
+    )
+    analysis = SolarAnalysisResult(analysis_message="분석 완료", items=[item], unresolved_line=None)
+    _patch_analyze_message(monkeypatch, result=analysis)
+    fake_db = _CreateFakeSession(current_request_sequence=[None, None], active_cycle_sequence=[None, None])
+
+    result = _call_create(fake_db, client_event_id="evt-recurring", message="매일 영어 단어 20개씩 외울래")
+
+    assert result.created is True
+    request_obj, item_obj = fake_db.added[:2]
+    assert request_obj.status == SolarRequestStatus.COLLECTING
+    assert item_obj.status == SolarItemStatus.INFO_MISSING
+    assert item_obj.normalized_payload["_unsupportedIntent"] == "RECURRING_TASK"
+    assert item_obj.normalized_payload["deadlineAt"] is None
+    assert item_obj.normalized_payload["estimatedMinutes"] is None
+    assert item_obj.normalized_payload["amountText"] is None
+    question = fake_db.added[-1]
+    assert question.message_metadata == {
+        "itemId": str(item_obj.id),
+        "field": "unsupportedRecurrence",
+        "followUpType": "UNSUPPORTED_TASK_RECURRENCE",
+    }
+    assert "반복 계획은 아직 지원하지 않아요" in question.content
+    assert "전체 분량" in question.content
+    assert "총 예상 시간" in question.content
+
+
 def test_create_solar_request_active_cycle_update_remaining_minutes_only(monkeypatch, patch_plan_management_state):
     task = _make_task(estimated_minutes=180, remaining_minutes=180)
     item = SolarAnalysisItem(

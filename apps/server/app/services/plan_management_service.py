@@ -379,7 +379,8 @@ def _find_special_question_message(messages: Sequence[SolarMessage]) -> SolarMes
         and isinstance(message.message_metadata, dict)
         and (
             message.message_metadata.get("unresolved") is True
-            or message.message_metadata.get("followUpType") == "CHANGE_DETAILS"
+            or message.message_metadata.get("followUpType")
+            in ("CHANGE_DETAILS", "UNSUPPORTED_TASK_RECURRENCE")
         )
     ]
     if not candidates:
@@ -503,8 +504,23 @@ def _build_solar_request_detail(
         if special_message is not None:
             metadata = special_message.message_metadata
             is_change_details = isinstance(metadata, dict) and metadata.get("followUpType") == "CHANGE_DETAILS"
-            field = "changeDetails" if is_change_details else "targetEntityId"
-            current_question = CurrentQuestion(item_id=None, field=field, message=special_message.content)
+            is_unsupported_recurrence = (
+                isinstance(metadata, dict)
+                and metadata.get("followUpType") == "UNSUPPORTED_TASK_RECURRENCE"
+            )
+            field = (
+                "unsupportedRecurrence"
+                if is_unsupported_recurrence
+                else "changeDetails" if is_change_details else "targetEntityId"
+            )
+            item_id = None
+            if is_unsupported_recurrence:
+                try:
+                    item_id = uuid.UUID(str(metadata.get("itemId")))
+                except (TypeError, ValueError):
+                    item_id = None
+            current_question = CurrentQuestion(item_id=item_id, field=field, message=special_message.content)
+            pending_item_id = item_id
             input_placeholder = _CHANGE_INPUT_PLACEHOLDER
         else:
             pending_item = _find_pending_item(request, sorted_items)

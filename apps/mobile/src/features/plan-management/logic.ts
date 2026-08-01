@@ -122,6 +122,7 @@ function getQuestionTarget(message: SolarRequest['messages'][number]) {
     message.kind !== 'QUESTION' ||
     message.metadata.promptType === CHANGE_CONFIRMATION_PROMPT_TYPE ||
     message.metadata.followUpType === 'CHANGE_DETAILS' ||
+    message.metadata.followUpType === 'UNSUPPORTED_TASK_RECURRENCE' ||
     message.metadata.unresolved === true ||
     typeof itemId !== 'string' ||
     !itemId.trim() ||
