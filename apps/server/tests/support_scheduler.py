@@ -11,8 +11,6 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy.sql.elements import BindParameter, BooleanClauseList
-
 from app.models.enums import (
     AmountSource,
     EstimateSource,
@@ -25,30 +23,7 @@ from app.models.fixed_schedule import FixedSchedule
 from app.models.plan_block import PlanBlock
 from app.models.planning_cycle import PlanningCycle
 from app.models.task import Task
-
-
-def _resolve_operand(side, obj):
-    if isinstance(side, BindParameter):
-        return side.value
-    key = getattr(side, "key", None)
-    if key is not None and hasattr(obj, key):
-        return getattr(obj, key)
-    raise AssertionError(f"FakeSchedulerSession이 처리할 수 없는 조건식입니다: {side!r}")
-
-
-def _eval_clause(clause, obj) -> bool:
-    if isinstance(clause, BooleanClauseList):
-        results = [_eval_clause(sub, obj) for sub in clause.clauses]
-        operator_name = getattr(clause.operator, "__name__", "")
-        if operator_name == "and_":
-            return all(results)
-        if operator_name == "or_":
-            return any(results)
-        raise AssertionError(f"지원하지 않는 불리언 연산자입니다: {clause.operator}")
-
-    left = _resolve_operand(clause.left, obj)
-    right = _resolve_operand(clause.right, obj)
-    return bool(clause.operator(left, right))
+from tests.support_sql_eval import eval_clause as _eval_clause
 
 
 class _FakeScalars:

@@ -89,7 +89,7 @@ export type ExecutionStatusResponse =
 export type AcknowledgeExecutionResultResponse = {
   requestId: string;
   resultAcknowledgedAt: string;
-  nextPlanManagementScreenMode: 'ACTIVE_CYCLE_ENTRY';
+  nextPlanManagementScreenMode: 'NEW_CYCLE_ENTRY' | 'ACTIVE_CYCLE_ENTRY';
 };
 
 export type MessageRole = 'USER' | 'ASSISTANT';

@@ -8,6 +8,10 @@ type RequestOptions = {
   method?: HttpMethod;
   headers?: Record<string, string>;
   body?: unknown;
+  // 호출자가 이미 session을 확인해 access_token을 갖고 있으면(예: bootstrap 최초 동기화)
+  // 이 값을 그대로 쓰고, 이 함수 안에서 getSession()을 다시 호출하지 않는다 — 같은 요청 안에서
+  // session을 두 번 독립적으로 조회해 서로 다른 결과를 받는 경우를 없앤다.
+  accessToken?: string;
 };
 
 // 서버가 실제로 정의한 code가 아니라 네트워크 실패·비-JSON 응답 등 클라이언트 쪽에서만 발생하는 상황을 표시하는 값이다.
@@ -41,17 +45,21 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     headers.set('Content-Type', 'application/json');
   }
   if (!headers.has('Authorization')) {
-    // 세션 조회 자체가 실패해도(예: 토큰 갱신 네트워크 오류) 요청을 막지 않고 인증 헤더 없이 계속 진행한다.
-    // 실제 인증 필요 여부는 서버의 401 AUTH_REQUIRED 응답이 판단한다.
-    try {
-      const {
-        data: { session },
-      } = await getSupabaseClient().auth.getSession();
-      if (session?.access_token) {
-        headers.set('Authorization', `Bearer ${session.access_token}`);
+    if (options.accessToken) {
+      headers.set('Authorization', `Bearer ${options.accessToken}`);
+    } else {
+      // 세션 조회 자체가 실패해도(예: 토큰 갱신 네트워크 오류) 요청을 막지 않고 인증 헤더 없이 계속 진행한다.
+      // 실제 인증 필요 여부는 서버의 401 AUTH_REQUIRED 응답이 판단한다.
+      try {
+        const {
+          data: { session },
+        } = await getSupabaseClient().auth.getSession();
+        if (session?.access_token) {
+          headers.set('Authorization', `Bearer ${session.access_token}`);
+        }
+      } catch {
+        // 세션 조회 실패는 무시한다. token이나 오류 내용을 로그로 남기지 않는다.
       }
-    } catch {
-      // 세션 조회 실패는 무시한다. token이나 오류 내용을 로그로 남기지 않는다.
     }
   }
 

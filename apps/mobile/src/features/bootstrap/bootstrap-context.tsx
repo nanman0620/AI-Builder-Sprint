@@ -5,7 +5,7 @@ import { ApiClientError } from '@/src/services/api/client';
 import { getSupabaseClient } from '@/src/services/supabase/client';
 
 import { getBootstrap } from './api';
-import type { BootstrapSyncResult } from './route';
+import { resolveSessionGate, type BootstrapSyncResult } from './route';
 import type { BootstrapResponse } from './types';
 
 export type BootstrapStatus = 'idle' | 'loading' | 'success' | 'error';
@@ -67,10 +67,11 @@ export function BootstrapProvider({ children }: { children: ReactNode }) {
           data: { session },
         } = await getSupabaseClient().auth.getSession();
 
-        if (!session) {
+        const gate = resolveSessionGate(session);
+        if (gate.type === 'no-session') {
           result = { type: 'no-session' };
         } else {
-          const bootstrap = await getBootstrap();
+          const bootstrap = await getBootstrap(gate.accessToken);
           result = { type: 'success', data: bootstrap };
         }
       } catch (err) {
