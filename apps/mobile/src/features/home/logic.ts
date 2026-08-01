@@ -77,6 +77,21 @@ export function resolveScoreBand(score: number): ScoreBand {
   return 'SCORE_00';
 }
 
+export function resolveCheckInFeedback(score: number): string {
+  const scoreBand = resolveScoreBand(score);
+
+  if (scoreBand === 'SCORE_100') {
+    return `${score}점, 오늘의 계획을 모두 이어냈어요!`;
+  }
+  if (scoreBand === 'SCORE_60') {
+    return `${score}점, 충분히 잘 이어왔어요`;
+  }
+  if (scoreBand === 'SCORE_30') {
+    return `${score}점, 작지만 분명하게 이어왔어요`;
+  }
+  return `${score}점, 괜찮아요\n다음 계획부터 다시 이으면 돼요`;
+}
+
 // IN_PROGRESS에서도 서버의 progress.percentage를 같은 네 개의 정적 자산 구간에 매핑한다.
 // percentage는 HomeProgress에서 number로 고정되어 있고, 체크 직후 optimistic/server progress가
 // 모두 이 함수로 다시 파생되므로 100%가 기본 마스코트로 남지 않는다.

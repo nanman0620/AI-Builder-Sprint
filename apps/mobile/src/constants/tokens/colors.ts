@@ -10,6 +10,13 @@ export const colors = {
   border: '#E5E7EB',
   // 완료된 PlanBlock 카드, 진행률 게이지 트랙, 프로필 아바타 배경 등에서 반복되는 옅은 보라 표면 (UI-007, UI-011, UI-027)
   primarySoft: '#F3E8FF',
+  checkInListBorder: '#D9D9DE',
+  checkInCompletedSurface: '#F3EAFE',
+  checkInCompletedBorder: '#D9B8F7',
+  checkInIncompleteBorder: '#3A3A3E',
+  checkInCompletedAccent: '#A855F7',
+  checkInScrollbarTrack: '#D9D9DE',
+  checkInScrollbarThumb: '#77777D',
   // 마감 임박(DEADLINE_WARNING) 배지·카드에서 반복되는 주황 계열 경고색 (UI-008, UI-009)
   warning: '#F59E0B',
 } as const;

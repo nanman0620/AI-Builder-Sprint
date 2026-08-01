@@ -63,9 +63,11 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
   },
   mascot: {
-    width: 96,
-    height: 96,
-    marginBottom: spacing.lg,
+    width: 240,
+    height: 240,
+    marginLeft: -20,
+    marginBottom: spacing.lg - 60,
+    marginTop: -50,
   },
   title: {
     ...typography.title,

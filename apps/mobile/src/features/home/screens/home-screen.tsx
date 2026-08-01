@@ -1,22 +1,23 @@
 import { useRouter } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { CircularGauge } from '@/src/components/CircularGauge';
 import { ErrorView } from '@/src/components/common/error-view';
 import { LoadingView } from '@/src/components/common/loading-view';
 import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 import { useBootstrap } from '@/src/features/bootstrap/bootstrap-context';
 
-import { CheckInPlanRow } from '../components/check-in-plan-row';
+import { CheckInPlanList } from '../components/check-in-plan-list';
+import { CheckInStatusIcon } from '../components/check-in-plan-row';
 import { DeadlineWarningList } from '../components/deadline-warning-list';
 import { FinalizingView } from '../components/finalizing-view';
-import { HomeHeader } from '../components/home-header';
+import { HomeDateBadge, HomeHeader } from '../components/home-header';
 import { HomeMascot, ScoreMascot } from '../components/home-mascot';
 import { PlanBlockRow } from '../components/plan-block-row';
 import { ProgressBar } from '../components/progress-bar';
-import { ScoreGauge } from '../components/score-gauge';
 import { useHideTabBar } from '../hooks/use-hide-tab-bar';
 import { useHome } from '../hooks/use-home';
-import { formatPeriodLabel, resolveHomeMascotKey, resolveProgressMascotBand, resolveScoreBand, resolveVisibleHomeState, shouldHideTabBar, sortPlanBlocksByDisplayOrder } from '../logic';
+import { formatPeriodLabel, resolveCheckInFeedback, resolveHomeMascotKey, resolveProgressMascotBand, resolveScoreBand, resolveVisibleHomeState, shouldHideTabBar, sortPlanBlocksByDisplayOrder } from '../logic';
 import type { CheckInResult } from '../types';
 
 export function HomeScreen() {
@@ -174,18 +175,6 @@ export function HomeScreen() {
   );
 }
 
-// 화면 흐름 PDF 5-7절의 우선순위 규칙(cycleEnded → score>=60 → score<60)만 확인됐고, score>=60 문구는
-// UI-011 캡처로 확인했다. score<60·cycleEnded=true 문구는 캡처가 없어 잠정 문구이며 팀 확인이 필요하다.
-function resolveCheckInFeedback(result: CheckInResult): string {
-  if (result.cycleEnded) {
-    return '7일의 계획이 모두 끝났어요';
-  }
-  if (result.score >= 60) {
-    return `${result.score}점, 충분히 잘 이어왔어요`;
-  }
-  return `${result.score}점, 놓친 계획은 다시 이어뒀어요`;
-}
-
 type CheckInResultBodyProps = {
   nickname: string | null;
   result: CheckInResult;
@@ -194,36 +183,52 @@ type CheckInResultBodyProps = {
   onAcknowledge: () => void;
 };
 
-function CheckInResultBody({ nickname, result, isSubmitting, error, onAcknowledge }: CheckInResultBodyProps) {
+function CheckInResultBody({
+  nickname,
+  result,
+  isSubmitting,
+  error,
+  onAcknowledge,
+}: CheckInResultBodyProps) {
   const scoreBand = resolveScoreBand(result.score);
   const periodLabel = formatPeriodLabel(result.period);
+  // API가 완료/미완료를 별도 배열로만 제공하고 공통 displayOrder는 제공하지 않으므로,
+  // 각 배열 내부의 서버 순서를 유지한다. 두 배열 사이의 원본 혼합 순서는 복원할 수 없다.
+  const resultPlans = [...result.completedPlans, ...result.notDonePlans];
 
   return (
     <View style={styles.screen}>
       <View style={styles.resultHeaderRow}>
         <View style={styles.resultHeaderText}>
+          <View style={styles.resultDateBadge}>
+            <HomeDateBadge logicalDate={result.checkDate} />
+          </View>
           <Text style={styles.resultEyebrow}>
             {nickname ? `${nickname}님의 ${periodLabel} 결과` : `${periodLabel} 결과`}
           </Text>
-          <Text style={styles.bodyHeadline}>{resolveCheckInFeedback(result)}</Text>
+          <Text style={[styles.bodyHeadline, styles.resultHeaderTitleText]}>
+            {resolveCheckInFeedback(result.score)}
+          </Text>
         </View>
-        <ScoreGauge score={result.score} />
+        <CircularGauge value={result.score} size={88} />
       </View>
       <ScoreMascot scoreBand={scoreBand} style={styles.centerMascot} />
       <View style={styles.resultCountsRow}>
-        <Text style={styles.resultCount}>✓ 완료 {result.completedPlanCount}</Text>
-        <Text style={styles.resultCount}>○ 미완료 {result.notDonePlanCount}</Text>
+        <View style={styles.resultCountGroup}>
+          <CheckInStatusIcon completed size={20} />
+          <Text style={styles.resultCount}>완료 {result.completedPlanCount}</Text>
+        </View>
+        <View style={styles.resultCountGroup}>
+          <CheckInStatusIcon completed={false} size={20} />
+          <Text style={styles.resultCount}>미완료 {result.notDonePlanCount}</Text>
+        </View>
       </View>
-      <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
-        {result.completedPlans.map((plan) => (
-          <CheckInPlanRow key={plan.id} displayTitle={plan.displayTitle} completed />
-        ))}
-        {result.notDonePlans.map((plan) => (
-          <CheckInPlanRow key={plan.id} displayTitle={plan.displayTitle} completed={false} />
-        ))}
-      </ScrollView>
+      <CheckInPlanList plans={resultPlans} />
       {error ? <Text style={styles.error}>{error}</Text> : null}
-      <Pressable disabled={isSubmitting} onPress={onAcknowledge} style={[styles.filledButton, isSubmitting && styles.buttonDisabled]}>
+      <Pressable
+        disabled={isSubmitting}
+        onPress={onAcknowledge}
+        style={[styles.filledButton, isSubmitting && styles.buttonDisabled]}>
         <Text style={styles.filledButtonText}>{periodLabel} 계획 보기</Text>
       </Pressable>
     </View>
@@ -296,6 +301,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: spacing.md,
     marginHorizontal: spacing.lg,
+    marginTop: spacing.md+10,
     marginBottom: spacing.lg,
     alignItems: 'center',
   },
@@ -324,19 +330,41 @@ const styles = StyleSheet.create({
     flex: 1,
     marginRight: spacing.md,
   },
+  resultDateBadge: {
+    alignSelf: 'flex-start',
+    marginBottom: spacing.sm,
+  },
   resultEyebrow: {
-    ...typography.caption,
+    fontSize: 15,
+    lineHeight: 20,
+    fontFamily: fonts.medium,
     color: colors.textSecondary,
+    marginTop: 2,
     marginBottom: spacing.xs,
+    marginLeft: 6,
+  },
+  resultHeaderTitleText: {
+    fontSize: 17,
+    lineHeight: typography.title.lineHeight,
+    fontFamily: fonts.bold,
+    marginLeft: -42,
+    marginTop: -2,
   },
   resultCountsRow: {
     flexDirection: 'row',
     justifyContent: 'center',
-    marginBottom: spacing.sm,
+    alignItems: 'center',
+    gap: 48,
+    marginBottom: 12,
+    marginTop: -10,
+  },
+  resultCountGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   resultCount: {
     ...typography.body,
     color: colors.text,
-    marginHorizontal: spacing.md,
   },
 });
