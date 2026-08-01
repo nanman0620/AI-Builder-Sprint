@@ -3,7 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ErrorView } from '@/src/components/common/error-view';
 import { LoadingView } from '@/src/components/common/loading-view';
-import { colors, spacing, typography } from '@/src/constants/tokens';
+import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 import { useBootstrap } from '@/src/features/bootstrap/bootstrap-context';
 
 import { CheckInPlanRow } from '../components/check-in-plan-row';
@@ -262,7 +262,7 @@ const styles = StyleSheet.create({
   },
   sectionLabel: {
     ...typography.body,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
     color: colors.text,
     paddingHorizontal: spacing.lg,
     marginBottom: spacing.sm,
@@ -287,7 +287,7 @@ const styles = StyleSheet.create({
   outlineButtonText: {
     ...typography.body,
     color: colors.primary,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
   },
   filledButton: {
     backgroundColor: colors.primary,
@@ -303,7 +303,7 @@ const styles = StyleSheet.create({
   filledButtonText: {
     ...typography.body,
     color: colors.background,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
   },
   error: {
     ...typography.caption,

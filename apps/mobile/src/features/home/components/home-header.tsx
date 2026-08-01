@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { colors, spacing, typography } from '@/src/constants/tokens';
+import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
 import { formatLogicalDateBadge } from '../logic';
 import { ShopComingSoonModal } from './shop-coming-soon-modal';
@@ -105,7 +105,7 @@ const styles = StyleSheet.create({
   dateBadgeText: {
     ...typography.caption,
     color: colors.background,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
   },
   warningBadge: {
     borderColor: colors.warning,
@@ -117,7 +117,7 @@ const styles = StyleSheet.create({
   warningBadgeText: {
     ...typography.caption,
     color: colors.warning,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
   },
   title: {
     ...typography.title,

@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
 
-import { colors, spacing, typography } from '@/src/constants/tokens';
+import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
 import type { SolarRequestItem } from '../types';
 
@@ -60,7 +60,7 @@ const styles = StyleSheet.create({
   },
   title: {
     ...typography.body,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
     color: colors.text,
     flex: 1,
     marginRight: spacing.sm,
@@ -72,7 +72,7 @@ const styles = StyleSheet.create({
   },
   badgeText: {
     ...typography.caption,
-    fontWeight: '600',
+    fontFamily: fonts.semiBold,
   },
   statusLine: {
     ...typography.caption,

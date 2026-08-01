@@ -1,6 +1,6 @@
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { colors, spacing, typography } from '@/src/constants/tokens';
+import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
 type ExitConfirmationModalProps = {
   visible: boolean;
@@ -114,13 +114,13 @@ const styles = StyleSheet.create({
   continueText: {
     ...typography.body,
     color: colors.textSecondary,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
     textAlign: 'center',
   },
   deleteText: {
     ...typography.body,
     color: colors.error,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
     textAlign: 'center',
   },
 });
