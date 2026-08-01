@@ -187,6 +187,62 @@ def test_system_prompt_includes_required_key_table_self_check_and_examples():
     assert "예시 2" in system_prompt
 
 
+def test_system_prompt_requires_nonblank_item_specific_raw_line_text_for_every_task_action():
+    messages = solar_client._build_prompt_messages(
+        "테스트 메시지",
+        now=datetime(2026, 7, 31, 14, 0, tzinfo=timezone.utc),
+        purpose=SolarRequestPurpose.ACTIVE_CYCLE,
+        cycle_start=None,
+        cycle_end=None,
+        candidate_tasks=[],
+        candidate_fixed_schedules=[],
+    )
+
+    prompt = messages[0]["content"]
+    assert "TASK CREATE: rawLineText" in prompt
+    assert "TASK UPDATE: rawLineText" in prompt
+    assert "TASK DELETE: rawLineText" in prompt
+    assert "비어 있지 않은 문자열" in prompt
+    assert "전체 사용자 메시지를 모든 item에 동일하게 복사하지" in prompt
+
+
+def test_unresolved_answer_prompt_contains_task_update_exact_keys_and_raw_line_rules():
+    messages = solar_client._build_unresolved_answer_prompt_messages(
+        "20분으로 바꿔줘",
+        now=datetime(2026, 7, 31, 14, 0, tzinfo=timezone.utc),
+        expected_action="UPDATE",
+        expected_entity_type="TASK",
+        expected_target_kind="ENTITY",
+        original_raw_line_text="발표 대본 수정",
+        candidates=[{"id": TASK_ID, "title": "발표 대본"}],
+    )
+
+    prompt = messages[0]["content"]
+    assert "TASK UPDATE exact keys" in prompt
+    assert "rawLineText" in prompt
+    assert "deadlineState" in prompt
+    assert "updateFields" in prompt
+    assert "비어 있지 않은 문자열" in prompt
+    assert "TASK CREATE/DELETE" in prompt
+
+
+def test_repair_prompt_directly_explains_missing_raw_line_text_without_phantom_references():
+    messages = solar_client._build_repair_messages(
+        [{"role": "system", "content": "schema"}, {"role": "user", "content": "수정해줘"}],
+        '{"analysisMessage":"분석","items":[],"unresolvedLine":null}',
+        "MISSING_REQUIRED_KEY:rawLineText",
+    )
+
+    instruction = messages[-1]["content"]
+    assert "TASK UPDATE" in instruction
+    assert "rawLineText" in instruction
+    assert "사용자 원문 중 해당 item에 대응하는 부분" in instruction
+    assert "기존의 유효한 필드" in instruction
+    assert "action을 변경하지" in instruction
+    assert "action별 필수 키 표" not in instruction
+    assert "self-check" not in instruction
+
+
 def test_system_prompt_requires_title_amount_text_deduplication():
     """title에 amountText/deadlineAt/estimatedMinutes/remainingMinutes를 중복해 넣지 않는
     규칙, 고유 번호 보존, 모호할 때 확인 질문 유지, CREATE/UPDATE 공통 적용, self-check
@@ -435,6 +491,63 @@ def test_parse_delete_always_ready():
 
     assert result.items[0].missing_fields == []
     assert result.items[0].update_fields == []
+
+
+def test_parse_mixed_task_create_update_delete_preserves_item_specific_raw_lines():
+    create_item = _task_create_item(
+        title="영단어 암기",
+        amountText="20개",
+        amountSource="USER",
+    )
+    create_item["rawLineText"] = "영단어 20개는 추가하고"
+    update_item = {
+        "entityType": "TASK",
+        "action": "UPDATE",
+        "targetEntityId": TASK_ID,
+        "rawLineText": "발표 대본은 20분으로 바꾸고",
+        "deadlineState": "MISSING",
+        "normalizedPayload": {
+            "title": None,
+            "deadlineAt": None,
+            "estimatedMinutes": 20,
+            "estimatedMinutesSource": "USER",
+            "remainingMinutes": None,
+            "amountText": None,
+            "amountSource": None,
+        },
+        "pendingQuestion": None,
+        "updateFields": ["estimatedMinutes"],
+    }
+    delete_item = {
+        "entityType": "TASK",
+        "action": "DELETE",
+        "targetEntityId": OTHER_TASK_ID,
+        "rawLineText": "자료구조 복습은 없애줘",
+        "normalizedPayload": {
+            "title": None,
+            "deadlineAt": None,
+            "estimatedMinutes": None,
+            "estimatedMinutesSource": None,
+            "remainingMinutes": None,
+            "amountText": None,
+            "amountSource": None,
+        },
+        "pendingQuestion": None,
+    }
+
+    result = _parse(
+        _envelope(items=[create_item, update_item, delete_item]),
+        purpose=SolarRequestPurpose.ACTIVE_CYCLE,
+        candidate_task_ids={TASK_ID, OTHER_TASK_ID},
+    )
+
+    assert [item.action for item in result.items] == ["CREATE", "UPDATE", "DELETE"]
+    assert [item.raw_line_text for item in result.items] == [
+        "영단어 20개는 추가하고",
+        "발표 대본은 20분으로 바꾸고",
+        "자료구조 복습은 없애줘",
+    ]
+    assert result.items[1].raw_line_text.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -890,6 +1003,29 @@ def _pending_field_mismatch_item() -> dict:
     return item
 
 
+def _task_update_item_with_optional_raw_line(*, include_raw_line: bool) -> dict:
+    item = {
+        "entityType": "TASK",
+        "action": "UPDATE",
+        "targetEntityId": TASK_ID,
+        "deadlineState": "MISSING",
+        "normalizedPayload": {
+            "title": None,
+            "deadlineAt": None,
+            "estimatedMinutes": 20,
+            "estimatedMinutesSource": "USER",
+            "remainingMinutes": None,
+            "amountText": None,
+            "amountSource": None,
+        },
+        "pendingQuestion": None,
+        "updateFields": ["estimatedMinutes"],
+    }
+    if include_raw_line:
+        item["rawLineText"] = "발표 대본은 20분으로 바꿔줘"
+    return item
+
+
 def test_analyze_message_success_calls_solar_once(monkeypatch):
     content = _envelope(items=[_task_create_item()])
     call_count = _queue_urlopen(monkeypatch, [_success_envelope(content)])
@@ -930,6 +1066,34 @@ def test_analyze_message_repair_succeeds_after_first_violation(monkeypatch):
     assert result.items[0].missing_fields == []
 
 
+def test_analyze_message_repairs_missing_update_raw_line_text_and_preserves_valid_fields(
+    monkeypatch, caplog
+):
+    bad_content = _envelope(items=[_task_update_item_with_optional_raw_line(include_raw_line=False)])
+    good_content = _envelope(items=[_task_update_item_with_optional_raw_line(include_raw_line=True)])
+    call_count = _queue_urlopen(
+        monkeypatch, [_success_envelope(bad_content), _success_envelope(good_content)]
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = solar_client.analyze_message(
+            "발표 대본은 20분으로 바꿔줘",
+            now=_NOW,
+            purpose=SolarRequestPurpose.ACTIVE_CYCLE,
+            candidate_tasks=[{"id": TASK_ID}],
+        )
+
+    assert call_count["n"] == 2
+    assert any("MISSING_REQUIRED_KEY:rawLineText" in record.message for record in caplog.records)
+    item = result.items[0]
+    assert item.raw_line_text == "발표 대본은 20분으로 바꿔줘"
+    assert item.action == "UPDATE"
+    assert item.target_entity_id == TASK_ID
+    assert item.update_fields == ["estimatedMinutes"]
+    assert item.normalized_payload["estimatedMinutes"] == 20
+    assert item.normalized_payload["estimatedMinutesSource"] == "USER"
+
+
 def test_analyze_message_repair_failure_raises_after_two_calls(monkeypatch):
     bad_content = _envelope(items=[_pending_field_mismatch_item()])
     call_count = _queue_urlopen(monkeypatch, [_success_envelope(bad_content), _success_envelope(bad_content)])
@@ -937,6 +1101,24 @@ def test_analyze_message_repair_failure_raises_after_two_calls(monkeypatch):
     with pytest.raises(SolarUnavailableError):
         solar_client.analyze_message("테스트 메시지", now=_NOW, purpose=SolarRequestPurpose.NEW_CYCLE)
 
+    assert call_count["n"] == 2
+
+
+def test_analyze_message_missing_update_raw_line_text_in_both_responses_still_raises(monkeypatch):
+    bad_content = _envelope(items=[_task_update_item_with_optional_raw_line(include_raw_line=False)])
+    call_count = _queue_urlopen(
+        monkeypatch, [_success_envelope(bad_content), _success_envelope(bad_content)]
+    )
+
+    with pytest.raises(SolarUnavailableError) as exc_info:
+        solar_client.analyze_message(
+            "발표 대본은 20분으로 바꿔줘",
+            now=_NOW,
+            purpose=SolarRequestPurpose.ACTIVE_CYCLE,
+            candidate_tasks=[{"id": TASK_ID}],
+        )
+
+    assert exc_info.value.code == "MISSING_REQUIRED_KEY:rawLineText"
     assert call_count["n"] == 2
 
 

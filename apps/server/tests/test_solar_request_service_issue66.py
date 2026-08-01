@@ -25,6 +25,7 @@ from app.services.solar_client import (
     ChangeInputPatchRequestItemOperation,
     ResolvedTargetOnly,
     SolarAnalysisItem,
+    SolarUnavailableError,
 )
 
 
@@ -737,3 +738,30 @@ def test_add_solar_message_write_failure_rolls_back_second_phase_once(monkeypatc
     assert db.persisted_messages == committed_messages
     assert db.persisted_items == committed_items
     assert db.request.status == SolarRequestStatus.CHANGE_INPUT
+
+
+def test_add_solar_message_repair_failure_returns_503_without_partial_writes(monkeypatch):
+    db = _TransactionTrackingDb()
+    _configure_message_transaction_test(monkeypatch, db)
+
+    def _raise_after_repair(*args, **kwargs):
+        raise SolarUnavailableError(
+            "repair 응답도 rawLineText를 누락했다.", code="MISSING_REQUIRED_KEY:rawLineText"
+        )
+
+    monkeypatch.setattr(solar_request_service.solar_client, "analyze_change_input", _raise_after_repair)
+
+    with pytest.raises(ApiError) as exc_info:
+        _add_message(
+            db,
+            event_id="evt-raw-line-repair-failed",
+            message="영단어 20개는 추가하고, 발표 대본은 20분으로 바꾸고, 자료구조 복습은 없애줘",
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.code == solar_request_service.CODE_SOLAR_UNAVAILABLE
+    assert db.persisted_messages == []
+    assert db.persisted_items == []
+    assert db.request.status == SolarRequestStatus.CHANGE_INPUT
+    assert db.commit_count == 1
+    assert db.rollback_count == 0
