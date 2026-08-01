@@ -1,6 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { colors, spacing, typography } from '@/src/constants/tokens';
+import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
 import type { HomePlanBlock } from '../types';
 
@@ -62,7 +62,7 @@ const styles = StyleSheet.create({
   checkmark: {
     color: colors.background,
     fontSize: 13,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
   },
   title: {
     ...typography.body,

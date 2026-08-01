@@ -1,6 +1,6 @@
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { colors, spacing, typography } from '@/src/constants/tokens';
+import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
 import type { DeadlineWarningItem } from '../types';
 
@@ -71,7 +71,7 @@ const styles = StyleSheet.create({
   },
   cardTitle: {
     ...typography.body,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
     color: colors.text,
   },
   cardDeadline: {
@@ -96,7 +96,7 @@ const styles = StyleSheet.create({
   },
   cardStatValue: {
     ...typography.body,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
     color: colors.text,
     marginTop: 2,
   },
@@ -124,6 +124,6 @@ const styles = StyleSheet.create({
   buttonText: {
     ...typography.body,
     color: colors.background,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
   },
 });

@@ -1,6 +1,6 @@
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { colors, spacing, typography } from '@/src/constants/tokens';
+import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
 const mascotDefault = require('@/assets/brand/mascot-default.png');
 
@@ -86,7 +86,7 @@ const styles = StyleSheet.create({
   refreshButtonText: {
     ...typography.body,
     color: colors.primary,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
   },
   disabled: {
     opacity: 0.5,

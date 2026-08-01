@@ -2,9 +2,10 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ErrorView } from '@/src/components/common/error-view';
-import { colors } from '@/src/constants/tokens';
+import { colors, fonts } from '@/src/constants/tokens';
 import { useAppSync } from '@/src/features/app-sync/app-sync-context';
 import { signOut } from '@/src/features/auth/services/auth-service';
 import { useBootstrap } from '@/src/features/bootstrap/bootstrap-context';
@@ -138,58 +139,60 @@ export default function SettingsScreen() {
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>설정</Text>
-      </View>
-      {isLoading || !profile ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={PURPLE} />
+    <SafeAreaView style={styles.safeArea} edges={['top']}>
+      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>설정</Text>
         </View>
-      ) : (
-        <>
-          <View style={styles.content}>
-            <ProfileCard profile={profile} />
-            <View style={styles.menuGroup}>
-              <Pressable style={styles.menuCard} onPress={() => router.push('/(tabs)/settings/profile')}>
-                <Text style={styles.menuTitle}>개인정보 수정</Text>
-                <Text style={styles.menuSubtitle}>닉네임·이메일·비밀번호를 수정해요</Text>
-              </Pressable>
-              <Pressable style={styles.menuCard} onPress={() => setIsLogoutVisible(true)}>
-                <Text style={styles.menuTitle}>로그아웃</Text>
-                <Text style={styles.menuSubtitle}>현재 기기에서 로그아웃</Text>
-              </Pressable>
-              <Pressable style={styles.menuCard} onPress={() => router.push('/account-withdrawal')}>
-                <Text style={styles.menuTitle}>회원탈퇴</Text>
-                <Text style={styles.menuSubtitle}>이음 서비스 탈퇴</Text>
-              </Pressable>
-              {logoutError ? <Text style={styles.errorText}>{logoutError}</Text> : null}
-              {loadError && profile ? (
-                <View style={styles.refreshError}>
-                  <Text style={styles.errorText}>{loadError}</Text>
-                  <Pressable disabled={isLoading} onPress={() => void loadProfile()}>
-                    <Text style={styles.retryText}>다시 시도</Text>
-                  </Pressable>
-                </View>
-              ) : null}
+        {isLoading || !profile ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={PURPLE} />
+          </View>
+        ) : (
+          <>
+            <View style={styles.content}>
+              <ProfileCard profile={profile} />
+              <View style={styles.menuGroup}>
+                <Pressable style={styles.menuCard} onPress={() => router.push('/(tabs)/settings/profile')}>
+                  <Text style={styles.menuTitle}>개인정보 수정</Text>
+                  <Text style={styles.menuSubtitle}>닉네임·이메일·비밀번호를 수정해요</Text>
+                </Pressable>
+                <Pressable style={styles.menuCard} onPress={() => setIsLogoutVisible(true)}>
+                  <Text style={styles.menuTitle}>로그아웃</Text>
+                  <Text style={styles.menuSubtitle}>현재 기기에서 로그아웃</Text>
+                </Pressable>
+                <Pressable style={styles.menuCard} onPress={() => router.push('/account-withdrawal')}>
+                  <Text style={styles.menuTitle}>회원탈퇴</Text>
+                  <Text style={styles.menuSubtitle}>이음 서비스 탈퇴</Text>
+                </Pressable>
+                {logoutError ? <Text style={styles.errorText}>{logoutError}</Text> : null}
+                {loadError && profile ? (
+                  <View style={styles.refreshError}>
+                    <Text style={styles.errorText}>{loadError}</Text>
+                    <Pressable disabled={isLoading} onPress={() => void loadProfile()}>
+                      <Text style={styles.retryText}>다시 시도</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+              </View>
             </View>
-          </View>
-          <View style={styles.footer}>
-            <Image
-              source={require('@/assets/brand/eum-logo-tagline.png')}
-              style={styles.footerLogo}
-              resizeMode="contain"
-            />
-          </View>
-        </>
-      )}
-      <LogoutConfirmModal
-        visible={isLogoutVisible}
-        loading={isSubmitting}
-        onCancel={() => setIsLogoutVisible(false)}
-        onConfirm={handleLogout}
-      />
-    </ScrollView>
+            <View style={styles.footer}>
+              <Image
+                source={require('@/assets/brand/eum-logo-tagline.png')}
+                style={styles.footerLogo}
+                resizeMode="contain"
+              />
+            </View>
+          </>
+        )}
+        <LogoutConfirmModal
+          visible={isLogoutVisible}
+          loading={isSubmitting}
+          onCancel={() => setIsLogoutVisible(false)}
+          onConfirm={handleLogout}
+        />
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
@@ -202,6 +205,10 @@ const LOGO_TAGLINE_RATIO = 232 / 403;
 const LOGO_WIDTH = 140;
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
   container: {
     flexGrow: 1,
     backgroundColor: colors.background,
@@ -213,7 +220,7 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 15,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
     color: TEXT,
     textAlign: 'center',
   },
@@ -242,17 +249,18 @@ const styles = StyleSheet.create({
   },
   menuTitle: {
     fontSize: 14,
-    fontWeight: '600',
+    fontFamily: fonts.semiBold,
     color: TEXT,
   },
   menuSubtitle: {
     marginTop: 4,
     fontSize: 10,
-    fontWeight: '400',
+    fontFamily: fonts.regular,
     color: TEXT_SECONDARY,
   },
   errorText: {
     fontSize: 13,
+    fontFamily: fonts.regular,
     color: colors.error,
     marginTop: 8,
     marginHorizontal: 21,
@@ -263,7 +271,7 @@ const styles = StyleSheet.create({
   retryText: {
     fontSize: 13,
     color: PURPLE,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
     marginTop: 8,
     marginHorizontal: 21,
   },

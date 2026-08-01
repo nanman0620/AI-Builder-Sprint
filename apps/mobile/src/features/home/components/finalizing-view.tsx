@@ -1,6 +1,6 @@
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { colors, spacing, typography } from '@/src/constants/tokens';
+import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
 import { HomeMascot } from './home-mascot';
 
@@ -96,6 +96,6 @@ const styles = StyleSheet.create({
   retryButtonText: {
     ...typography.body,
     color: colors.background,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
   },
 });

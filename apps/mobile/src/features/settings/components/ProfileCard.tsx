@@ -1,6 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { Image, StyleSheet, Text, View } from 'react-native';
 
+import { fonts } from '@/src/constants/tokens';
 import type { Profile } from '../types';
 
 type ProfileCardProps = {
@@ -78,13 +79,13 @@ const styles = StyleSheet.create({
   },
   name: {
     fontSize: 16,
-    fontWeight: '600',
+    fontFamily: fonts.semiBold,
     color: '#1D1D23',
   },
   email: {
     marginTop: 4,
     fontSize: 9,
-    fontWeight: '400',
+    fontFamily: fonts.regular,
     color: '#85818A',
   },
 });

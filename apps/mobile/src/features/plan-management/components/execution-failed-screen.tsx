@@ -1,6 +1,6 @@
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { colors, spacing, typography } from '@/src/constants/tokens';
+import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
 const mascotSad = require('@/assets/brand/mascot-sad.png');
 
@@ -80,7 +80,7 @@ const styles = StyleSheet.create({
   errorSummaryText: {
     ...typography.body,
     color: colors.error,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
   },
   description: {
     ...typography.caption,
@@ -103,7 +103,7 @@ const styles = StyleSheet.create({
   retryButtonText: {
     ...typography.body,
     color: colors.background,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
   },
   cancelButton: {
     paddingVertical: spacing.md,
@@ -112,7 +112,7 @@ const styles = StyleSheet.create({
   cancelButtonText: {
     ...typography.body,
     color: colors.primary,
-    fontWeight: '700',
+    fontFamily: fonts.bold,
   },
   disabled: {
     opacity: 0.5,
