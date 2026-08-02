@@ -1,10 +1,6 @@
-import { Pressable, StyleSheet } from 'react-native';
-import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { Image, Pressable, StyleSheet } from 'react-native';
 
-// 저장소에 카카오 공식 로고 자산이 없어 UI-002를 참고한 노란 원형+말풍선 아이콘 근사 구현이다.
-// 캡처 이미지를 크롭해 쓰지 않고 코드 컴포넌트로만 구현한다.
 const KAKAO_YELLOW = '#FEE500';
-const KAKAO_ICON_COLOR = '#191919';
 
 type KakaoLoginButtonProps = {
   onPress: () => void;
@@ -19,7 +15,12 @@ export function KakaoLoginButton({ onPress, disabled = false }: KakaoLoginButton
       style={[styles.circle, disabled ? styles.disabled : null]}
       onPress={onPress}
       disabled={disabled}>
-      <MaterialIcons name="chat-bubble" size={16} color={KAKAO_ICON_COLOR} />
+      <Image
+        source={require('@/assets/brand/kakaotalk-seeklogo.png')}
+        style={styles.logo}
+        resizeMode="contain"
+        accessible={false}
+      />
     </Pressable>
   );
 }
@@ -32,6 +33,11 @@ const styles = StyleSheet.create({
     backgroundColor: KAKAO_YELLOW,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  logo: {
+    width: 32,
+    height: 32,
   },
   disabled: {
     opacity: 0.6,

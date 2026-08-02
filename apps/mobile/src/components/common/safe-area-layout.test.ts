@@ -24,7 +24,9 @@ test('tab scenes own native top safe area without wrapping the navigator or taki
   assert.match(tabsLayout, /<PlanExitGuardProvider>\s*<GuardedTabs \/>/);
   assert.match(tabsLayout, /tabBarStyle: getTabBarStyle\(bottomInset\)/);
   assert.match(tabsLayout, /tabBarHideOnKeyboard: true/);
-  assert.match(tabBar, /height: TAB_BAR_HEIGHT \+ bottomInset/);
+  assert.match(tabBar, /height: hidden \? bottomInset : TAB_BAR_HEIGHT \+ bottomInset/);
+  assert.doesNotMatch(tabBar, /display: 'none'/);
+  assert.match(tabBar, /hidden \? \{ opacity: 0, overflow: 'hidden', pointerEvents: 'none' \}/);
 });
 
 test('web tab content keeps a centered mobile reading width without changing the tab bar', () => {
@@ -43,7 +45,7 @@ test('tab scene safe area does not change the existing keyboard-avoiding plan co
   }
 });
 
-test('plan composer follows the real iOS keyboard frame with a small gap', () => {
+test('plan composer follows the keyboard with a small platform-safe gap', () => {
   const keyboardLayout = source(
     'src/features/plan-management/components/plan-keyboard-layout.tsx',
   );
@@ -55,7 +57,13 @@ test('plan composer follows the real iOS keyboard frame with a small gap', () =>
     /keyboardInset \+ COMPOSER_KEYBOARD_GAP - PLAN_COMPOSER_RESTING_BOTTOM_MARGIN/,
   );
   assert.match(keyboardLayout, /paddingBottom: keyboardPadding/);
-  assert.match(keyboardLayout, /Platform\.OS === 'android'[\s\S]*?behavior="height"/);
+  assert.match(keyboardLayout, /Keyboard\.addListener\('keyboardDidShow'/);
+  assert.match(keyboardLayout, /Keyboard\.addListener\('keyboardDidHide'/);
+  assert.match(
+    keyboardLayout,
+    /Platform\.OS === 'android'[\s\S]*?behavior="height"[\s\S]*?isAndroidKeyboardVisible \? styles\.androidKeyboardGap/,
+  );
+  assert.match(keyboardLayout, /androidKeyboardGap:\s*\{[\s\S]*?paddingBottom: COMPOSER_KEYBOARD_GAP/);
 });
 
 test('auth shell owns top and bottom safe areas while web keeps existing spacing', () => {

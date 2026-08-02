@@ -19,7 +19,8 @@ export function getTabBarStyle(bottomInset: number, hidden = false): ViewStyle {
     // React Navigation의 기본 상단 border는 별도 divider와 겹치지 않도록 비활성화한다.
     backgroundColor: 'transparent',
     borderTopWidth: 0,
-    height: TAB_BAR_HEIGHT + bottomInset,
-    ...(hidden ? { display: 'none' } : null),
+    // blocking 화면에서도 system navigation 영역만큼은 scene 밖에 남겨 CTA 침범을 막는다.
+    height: hidden ? bottomInset : TAB_BAR_HEIGHT + bottomInset,
+    ...(hidden ? { opacity: 0, overflow: 'hidden', pointerEvents: 'none' } : null),
   };
 }
