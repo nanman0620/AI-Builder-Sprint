@@ -166,17 +166,14 @@ export function HomeScreen() {
         completedPlanCount: data.progress.checkedCount,
         totalPlanCount: data.progress.totalCount,
       })
-    : '괜찮아요, 다시 이어가면 돼요';
+    : '지금부터 하나씩 시작해 봐요!';
 
   return (
     <View style={styles.screen}>
       <HomeHeader
         logicalDate={data.logicalDate}
-        title={
-          nickname
-            ? `${nickname}님의 ${periodLabel} 할 일\n${progressFeedback}`
-            : `안녕하세요,\n${periodLabel} 할 일도 ${progressFeedback}`
-        }
+        title={nickname ? `${nickname}님의 ${periodLabel} 할 일` : '안녕하세요,'}
+        feedback={nickname ? progressFeedback : `${periodLabel} 할 일도 ${progressFeedback}`}
       />
       {data.progress ? <ProgressBar percentage={data.progress.percentage} /> : null}
       {data.progress ? (

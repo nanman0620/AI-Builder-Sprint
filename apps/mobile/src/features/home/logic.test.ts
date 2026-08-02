@@ -119,6 +119,10 @@ test('IN_PROGRESS 후보는 구간마다 blank와 중복 없이 정확히 6개�
     assert.equal(new Set(messages).size, 6);
     assert.equal(messages.every((message) => message.trim().length > 0), true);
   }
+  assert.equal(
+    Object.values(PROGRESS_FEEDBACK_MESSAGES).flat().includes('괜찮아요, 다시 이어가면 돼요'),
+    false,
+  );
 });
 
 test('IN_PROGRESS 문구가 percentage 경계의 올바른 후보 구간을 따른다', () => {

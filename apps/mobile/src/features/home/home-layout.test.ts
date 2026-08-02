@@ -7,6 +7,10 @@ const homeScreenSource = readFileSync(
   resolve(process.cwd(), 'src/features/home/screens/home-screen.tsx'),
   'utf8'
 );
+const homeHeaderSource = readFileSync(
+  resolve(process.cwd(), 'src/features/home/components/home-header.tsx'),
+  'utf8'
+);
 
 test('빈 홈 상태는 음수 위치 보정 없이 스크롤 가능한 flex 구조를 사용한다', () => {
   const emptyStateStyles = homeScreenSource.slice(
@@ -16,7 +20,7 @@ test('빈 홈 상태는 음수 위치 보정 없이 스크롤 가능한 flex 구
   assert.match(homeScreenSource, /style=\{styles\.emptyStateScroll\}/);
   assert.match(homeScreenSource, /contentContainerStyle=\{styles\.emptyStateContent\}/);
   assert.match(emptyStateStyles, /emptyStateContent:\s*\{[\s\S]*?flexGrow: 1/);
-  assert.match(emptyStateStyles, /elevatedEmptyStateBody:\s*\{[\s\S]*?paddingTop: spacing\.sm/);
+  assert.match(emptyStateStyles, /elevatedEmptyStateBody:\s*\{[\s\S]*?paddingTop: 0/);
   assert.ok(
     homeScreenSource.indexOf('styles.outlineButton') < homeScreenSource.indexOf('</ScrollView>')
   );
@@ -43,6 +47,26 @@ test('IN_PROGRESS 헤더와 마스코트는 동일한 최신 percentage를 사�
   );
 });
 
+test('IN_PROGRESS 응원 문구는 한 줄에서만 축소되어 상점 크기와 진행률 바 위치를 유지한다', () => {
+  const inProgressBranch = homeScreenSource.slice(
+    homeScreenSource.indexOf('// IN_PROGRESS:'),
+    homeScreenSource.indexOf('type CheckInResultBodyProps'),
+  );
+  assert.match(inProgressBranch, /title=\{nickname \? `\$\{nickname\}님의 \$\{periodLabel\} 할 일` : '안녕하세요,'\}/);
+  assert.match(inProgressBranch, /feedback=\{nickname \? progressFeedback/);
+  assert.match(homeHeaderSource, /adjustsFontSizeToFit/);
+  assert.match(homeHeaderSource, /minimumFontScale=\{0\.65\}/);
+  assert.match(homeHeaderSource, /numberOfLines=\{1\}/);
+  assert.match(homeHeaderSource, /feedback\.length > 28/);
+  assert.match(homeHeaderSource, /feedback\.length > 22/);
+  assert.match(homeHeaderSource, /feedbackCompact:\s*\{[\s\S]*?fontSize: 14/);
+  assert.match(homeHeaderSource, /feedbackTight:\s*\{[\s\S]*?fontSize: 12/);
+  assert.match(homeHeaderSource, /height: headerContentHeight \*\s*0\.9/);
+  assert.match(homeHeaderSource, /headerRow:\s*\{[\s\S]*?position: 'relative'/);
+  assert.match(homeHeaderSource, /headerContent:\s*\{[\s\S]*?minWidth: 0/);
+  assert.match(homeHeaderSource, /shopButton:\s*\{[\s\S]*?position: 'absolute'[\s\S]*?right: -30/);
+});
+
 test('NO_ACTIVE_CYCLE과 NO_PLANS가 상단 정렬 wrapper와 계획관리 CTA를 사용한다', () => {
   const noActiveCycleBranch = homeScreenSource.slice(
     homeScreenSource.indexOf("visibleState === 'NO_ACTIVE_CYCLE'"),
@@ -62,7 +86,7 @@ test('NO_ACTIVE_CYCLE과 NO_PLANS가 상단 정렬 wrapper와 계획관리 CTA�
   assert.match(noActiveCycleBranch, /router\.push\('\/\(tabs\)\/plan-management'\)/);
   assert.match(noPlansBranch, /router\.push\('\/\(tabs\)\/plan-management'\)/);
   assert.match(elevatedEmptyStateStyles, /flexGrow:\s*1/);
-  assert.match(elevatedEmptyStateStyles, /paddingTop:\s*spacing\.sm/);
+  assert.match(elevatedEmptyStateStyles, /paddingTop:\s*0/);
   assert.match(elevatedEmptyStateStyles, /gap:\s*spacing\.sm/);
   assert.doesNotMatch(elevatedEmptyStateStyles, /justifyContent:\s*'center'/);
   assert.doesNotMatch(elevatedEmptyStateStyles, /(marginTop|top|translateY):\s*-/);
