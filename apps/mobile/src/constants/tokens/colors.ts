@@ -10,6 +10,18 @@ export const colors = {
   border: '#E5E7EB',
   // 완료된 PlanBlock 카드, 진행률 게이지 트랙, 프로필 아바타 배경 등에서 반복되는 옅은 보라 표면 (UI-007, UI-011, UI-027)
   primarySoft: '#F3E8FF',
-  // 마감 임박(DEADLINE_WARNING) 배지·카드에서 반복되는 주황 계열 경고색 (UI-008, UI-009)
-  warning: '#F59E0B',
+  // 마감 임박(DEADLINE_WARNING) 상단 "마감 임박" 배지 (UI-008, UI-009)
+  deadlineBadgeBackground: '#FFF9E5',
+  deadlineBadgeText: '#CCA33C',
+  // 마감 임박(DEADLINE_WARNING) 카드 (UI-008, UI-009)
+  deadlineCardBackground: '#FFF3C8',
+  deadlineCardBorder: '#F4D779',
+  deadlineCardTitle: '#25222A',
+  deadlineCardDeadline: '#C97813',
+  deadlineCardAvailable: '#25845D',
+  deadlineCardShortage: '#C97813',
+  deadlineCardIcon: '#FFA100',
+  deadlineCardStatLabel: '#817A88',
+  // 카드 아래(카드 밖) 배치 설명 문구, 헤더 부제목과 공용
+  deadlineDescriptionText: '#85818A',
 } as const;

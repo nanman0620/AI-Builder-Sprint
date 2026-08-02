@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View, type StyleProp, type TextStyle } from 'react-native';
 
 import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
 
@@ -14,11 +14,26 @@ type HomeHeaderProps = {
   nickname?: string | null;
   title: string;
   description?: string;
+  showShopIcon?: boolean;
+  titleStyle?: StyleProp<TextStyle>;
+  descriptionStyle?: StyleProp<TextStyle>;
+  descriptionNumberOfLines?: number;
 };
 
 // UI-005~UI-009 공통 상단 영역: 날짜 배지(+선택적 경고 배지) → 제목 → 선택적 설명.
 // FINALIZING(UI-010)은 이 헤더를 쓰지 않는 완전히 다른 전체화면 레이아웃이라 별도 컴포넌트(FinalizingView)로 둔다.
-export function HomeHeader({ logicalDate, badgeLabel, nickname, title, description }: HomeHeaderProps) {
+// showShopIcon=false와 titleStyle/descriptionStyle은 UI_REFERENCE.md 2절 예외(UI-008·UI-009, DEADLINE_WARNING)에서만 쓴다.
+export function HomeHeader({
+  logicalDate,
+  badgeLabel,
+  nickname,
+  title,
+  description,
+  showShopIcon = true,
+  titleStyle,
+  descriptionStyle,
+  descriptionNumberOfLines,
+}: HomeHeaderProps) {
   const trimmedNickname = nickname?.trim();
   const greeting = nickname !== undefined ? (trimmedNickname ? `${trimmedNickname}님,` : '안녕하세요,') : null;
   const [headerContentHeight, setHeaderContentHeight] = useState(0);
@@ -45,35 +60,43 @@ export function HomeHeader({ logicalDate, badgeLabel, nickname, title, descripti
               </View>
             ) : null}
           </View>
-          <Text style={styles.title}>
+          <Text style={[styles.title, titleStyle]}>
             {greeting ? `${greeting}\n` : ''}
             {title}
           </Text>
-          {description ? <Text style={styles.description}>{description}</Text> : null}
+          {description ? (
+            <Text style={[styles.description, descriptionStyle]} numberOfLines={descriptionNumberOfLines}>
+              {description}
+            </Text>
+          ) : null}
         </View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="상점 안내 열기"
-          hitSlop={spacing.sm}
-          onPress={() => setIsShopModalVisible(true)}
-          style={styles.shopButton}>
-          <Image
-            accessibilityIgnoresInvertColors
-            source={SHOP_ICON_SOURCE}
-            resizeMode="contain"
-            style={[
-              styles.shopIcon,
-              headerContentHeight > 0
-                ? { height: headerContentHeight *0.9, opacity: 1 }
-                : null,
-            ]}
-          />
-        </Pressable>
+        {showShopIcon ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="상점 안내 열기"
+            hitSlop={spacing.sm}
+            onPress={() => setIsShopModalVisible(true)}
+            style={styles.shopButton}>
+            <Image
+              accessibilityIgnoresInvertColors
+              source={SHOP_ICON_SOURCE}
+              resizeMode="contain"
+              style={[
+                styles.shopIcon,
+                headerContentHeight > 0
+                  ? { height: headerContentHeight *0.9, opacity: 1 }
+                  : null,
+              ]}
+            />
+          </Pressable>
+        ) : null}
       </View>
-      <ShopComingSoonModal
-        visible={isShopModalVisible}
-        onClose={() => setIsShopModalVisible(false)}
-      />
+      {showShopIcon ? (
+        <ShopComingSoonModal
+          visible={isShopModalVisible}
+          onClose={() => setIsShopModalVisible(false)}
+        />
+      ) : null}
     </View>
   );
 }
@@ -108,7 +131,8 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bold,
   },
   warningBadge: {
-    borderColor: colors.warning,
+    backgroundColor: colors.deadlineBadgeBackground,
+    borderColor: colors.deadlineBadgeText,
     borderWidth: 1,
     borderRadius: 999,
     paddingHorizontal: spacing.sm,
@@ -116,7 +140,7 @@ const styles = StyleSheet.create({
   },
   warningBadgeText: {
     ...typography.caption,
-    color: colors.warning,
+    color: colors.deadlineBadgeText,
     fontFamily: fonts.bold,
   },
   title: {
