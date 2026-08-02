@@ -111,7 +111,7 @@ export function HomeScreen() {
           style={styles.emptyStateScroll}
           contentContainerStyle={styles.emptyStateContent}
           bounces={false}>
-          <View style={styles.emptyStateBody}>
+          <View style={styles.elevatedEmptyStateBody}>
             <HomeMascot
               mascotKey={resolveHomeMascotKey('NO_ACTIVE_CYCLE')}
               size={290}
@@ -142,7 +142,7 @@ export function HomeScreen() {
           style={styles.emptyStateScroll}
           contentContainerStyle={styles.emptyStateContent}
           bounces={false}>
-          <View style={styles.noPlansBody}>
+          <View style={styles.elevatedEmptyStateBody}>
             <HomeMascot mascotKey={resolveHomeMascotKey('NO_PLANS')} style={styles.centerMascot} />
             <Text style={styles.bodyHeadline}>지금 시간대에는 예정된 계획이 없어요.</Text>
             <Text style={styles.bodyDescription}>잠시 쉬어가도 괜찮아요.</Text>
@@ -277,15 +277,10 @@ const styles = StyleSheet.create({
     paddingTop: spacing.xl * 2,
     paddingBottom: spacing.xl,
   },
-  emptyStateBody: {
+  elevatedEmptyStateBody: {
     flexGrow: 1,
     alignItems: 'center',
-    justifyContent: 'center',
-  },
-  noPlansBody: {
-    flexGrow: 1,
-    alignItems: 'center',
-    paddingTop: spacing.sm,
+    paddingTop: 0,
     gap: spacing.sm,
   },
   centerMascot: {

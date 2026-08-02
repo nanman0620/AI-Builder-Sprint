@@ -16,7 +16,7 @@ test('빈 홈 상태는 음수 위치 보정 없이 스크롤 가능한 flex 구
   assert.match(homeScreenSource, /style=\{styles\.emptyStateScroll\}/);
   assert.match(homeScreenSource, /contentContainerStyle=\{styles\.emptyStateContent\}/);
   assert.match(emptyStateStyles, /emptyStateContent:\s*\{[\s\S]*?flexGrow: 1/);
-  assert.match(emptyStateStyles, /emptyStateBody:\s*\{[\s\S]*?justifyContent: 'center'/);
+  assert.match(emptyStateStyles, /elevatedEmptyStateBody:\s*\{[\s\S]*?paddingTop: spacing\.sm/);
   assert.ok(
     homeScreenSource.indexOf('styles.outlineButton') < homeScreenSource.indexOf('</ScrollView>')
   );
@@ -43,7 +43,7 @@ test('IN_PROGRESS 헤더와 마스코트는 동일한 최신 percentage를 사�
   );
 });
 
-test('NO_PLANS만 전용 상단 정렬 wrapper와 계획관리 CTA를 사용한다', () => {
+test('NO_ACTIVE_CYCLE과 NO_PLANS가 상단 정렬 wrapper와 계획관리 CTA를 사용한다', () => {
   const noActiveCycleBranch = homeScreenSource.slice(
     homeScreenSource.indexOf("visibleState === 'NO_ACTIVE_CYCLE'"),
     homeScreenSource.indexOf("visibleState === 'NO_PLANS'"),
@@ -52,20 +52,20 @@ test('NO_PLANS만 전용 상단 정렬 wrapper와 계획관리 CTA를 사용한�
     homeScreenSource.indexOf("visibleState === 'NO_PLANS'"),
     homeScreenSource.indexOf('// IN_PROGRESS:'),
   );
-  const noPlansStyles = homeScreenSource.slice(
-    homeScreenSource.indexOf('noPlansBody:'),
+  const elevatedEmptyStateStyles = homeScreenSource.slice(
+    homeScreenSource.indexOf('elevatedEmptyStateBody:'),
     homeScreenSource.indexOf('centerMascot:'),
   );
 
-  assert.match(noActiveCycleBranch, /style=\{styles\.emptyStateBody\}/);
-  assert.doesNotMatch(noActiveCycleBranch, /styles\.noPlansBody/);
-  assert.match(noPlansBranch, /style=\{styles\.noPlansBody\}/);
+  assert.match(noActiveCycleBranch, /style=\{styles\.elevatedEmptyStateBody\}/);
+  assert.match(noPlansBranch, /style=\{styles\.elevatedEmptyStateBody\}/);
+  assert.match(noActiveCycleBranch, /router\.push\('\/\(tabs\)\/plan-management'\)/);
   assert.match(noPlansBranch, /router\.push\('\/\(tabs\)\/plan-management'\)/);
-  assert.match(noPlansStyles, /flexGrow:\s*1/);
-  assert.match(noPlansStyles, /paddingTop:\s*spacing\.sm/);
-  assert.match(noPlansStyles, /gap:\s*spacing\.sm/);
-  assert.doesNotMatch(noPlansStyles, /justifyContent:\s*'center'/);
-  assert.doesNotMatch(noPlansStyles, /(marginTop|top|translateY):\s*-/);
+  assert.match(elevatedEmptyStateStyles, /flexGrow:\s*1/);
+  assert.match(elevatedEmptyStateStyles, /paddingTop:\s*spacing\.sm/);
+  assert.match(elevatedEmptyStateStyles, /gap:\s*spacing\.sm/);
+  assert.doesNotMatch(elevatedEmptyStateStyles, /justifyContent:\s*'center'/);
+  assert.doesNotMatch(elevatedEmptyStateStyles, /(marginTop|top|translateY):\s*-/);
 });
 
 test('NO_PLANS 조정은 공용 마스코트 stage와 다른 홈 상태 분기를 변경하지 않는다', () => {
@@ -80,5 +80,5 @@ test('NO_PLANS 조정은 공용 마스코트 stage와 다른 홈 상태 분기�
 
   assert.match(noPlansBranch, /<HomeMascot mascotKey=\{resolveHomeMascotKey\('NO_PLANS'\)\}/);
   assert.doesNotMatch(noPlansBranch, /(mascotStage|mascotBackdrop|mascotImage)/);
-  assert.doesNotMatch(inProgressBranch, /styles\.noPlansBody/);
+  assert.doesNotMatch(inProgressBranch, /styles\.elevatedEmptyStateBody/);
 });
