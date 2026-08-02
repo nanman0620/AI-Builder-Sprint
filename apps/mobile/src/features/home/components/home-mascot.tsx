@@ -1,8 +1,8 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { Animated, Easing, Image, StyleSheet, View, type ImageSourcePropType, type StyleProp, type ViewStyle } from 'react-native';
+import { Animated, Easing, Image, StyleSheet, useWindowDimensions, View, type ImageSourcePropType, type StyleProp, type ViewStyle } from 'react-native';
 import Svg, { Circle, Defs, Ellipse, Path, RadialGradient, Stop } from 'react-native-svg';
 
-import { colors } from '@/src/constants/tokens';
+import { colors, spacing } from '@/src/constants/tokens';
 
 import type { HomeMascotKey, ScoreBand } from '../logic';
 
@@ -36,14 +36,21 @@ type HomeMascotProps = {
 };
 
 export function HomeMascot({ mascotKey, size = 160, style, showBackdrop = true }: HomeMascotProps) {
+  const { width: viewportWidth } = useWindowDimensions();
+  const availableWidth = viewportWidth > 0 ? viewportWidth - spacing.lg * 2 : size;
+  const renderedSize = Math.min(size, availableWidth);
   const groundShadowOffsetRatio = mascotKey === 'READING' ? 0.245 : 0.285;
   return (
     <MascotStage
-      contentSize={size}
+      contentSize={renderedSize}
       groundShadowOffsetRatio={showBackdrop ? groundShadowOffsetRatio : null}
       showBackdrop={showBackdrop}
       style={style}>
-      <Image source={MASCOT_SOURCES[mascotKey]} style={{ width: size, height: size }} resizeMode="contain" />
+      <Image
+        source={MASCOT_SOURCES[mascotKey]}
+        style={{ width: renderedSize, height: renderedSize }}
+        resizeMode="contain"
+      />
     </MascotStage>
   );
 }
@@ -142,7 +149,9 @@ function MascotStage({
   showBackdrop?: boolean;
   style?: StyleProp<ViewStyle>;
 }) {
-  const stageSize = Math.max(290, contentSize);
+  const { width: viewportWidth } = useWindowDimensions();
+  const availableWidth = viewportWidth > 0 ? viewportWidth - spacing.lg * 2 : 290;
+  const stageSize = Math.max(contentSize, Math.min(290, availableWidth));
   return (
     <View style={[styles.stage, { width: stageSize, height: stageSize }, style]}>
       <Svg pointerEvents="none" width={stageSize} height={stageSize} style={styles.backdrop}>
@@ -162,7 +171,7 @@ function MascotStage({
           </RadialGradient>
         </Defs>
         {showBackdrop ? (
-          <Circle cx={stageSize / 2} cy={stageSize / 2} r={145} fill="url(#mascotGlow)" />
+          <Circle cx={stageSize / 2} cy={stageSize / 2} r={stageSize / 2} fill="url(#mascotGlow)" />
         ) : null}
         {groundShadowOffsetRatio !== null ? (
           <Ellipse

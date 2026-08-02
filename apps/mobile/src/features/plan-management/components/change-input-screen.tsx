@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { colors, spacing, typography } from '@/src/constants/tokens';
 
@@ -7,6 +7,7 @@ import { buildConversationTimeline } from '../logic';
 import type { SolarRequest } from '../types';
 import { ConversationTimeline } from './conversation-timeline';
 import { MessageInput } from './message-input';
+import { PlanKeyboardLayout } from './plan-keyboard-layout';
 
 type ChangeInputScreenProps = {
   request: SolarRequest;
@@ -27,7 +28,7 @@ export function ChangeInputScreen({ request, isSubmitting, actionError, onSendMe
   };
 
   return (
-    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <PlanKeyboardLayout>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={styles.messages}>
           <ConversationTimeline entries={timeline} />
@@ -47,15 +48,11 @@ export function ChangeInputScreen({ request, isSubmitting, actionError, onSendMe
         placeholder={request.inputPlaceholder ?? '추가하거나 수정할 내용을 입력해 주세요.'}
         disabled={isSubmitting}
       />
-    </KeyboardAvoidingView>
+    </PlanKeyboardLayout>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
   content: {
     padding: spacing.lg,
   },

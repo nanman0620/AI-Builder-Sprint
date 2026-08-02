@@ -32,12 +32,12 @@ test('홈 마스코트는 선택적으로 자연스럽게 퍼지는 방사형 �
   assert.match(mascotSource, /cy=\{stageSize \/ 2 \+ contentSize \* groundShadowOffsetRatio\}/);
   assert.match(mascotSource, /rx=\{contentSize \* 0\.34\}/);
   assert.match(mascotSource, /ry=\{contentSize \* 0\.04\}/);
-  assert.match(mascotSource, /Math\.max\(290, contentSize\)/);
+  assert.match(mascotSource, /Math\.max\(contentSize, Math\.min\(290, availableWidth\)\)/);
   assert.match(mascotSource, /offset="0%"[\s\S]*?stopOpacity=\{0\.42\}/);
   assert.match(mascotSource, /offset="86%"[\s\S]*?stopOpacity=\{0\.06\}/);
   assert.match(mascotSource, /offset="95%"[\s\S]*?stopOpacity=\{0\.018\}/);
   assert.match(mascotSource, /offset="100%"[\s\S]*?stopOpacity=\{0\}/);
   assert.match(mascotSource, /showBackdrop \? \(/);
-  assert.match(mascotSource, /<Circle cx=\{stageSize \/ 2\} cy=\{stageSize \/ 2\} r=\{145\}/);
+  assert.match(mascotSource, /<Circle cx=\{stageSize \/ 2\} cy=\{stageSize \/ 2\} r=\{stageSize \/ 2\}/);
   assert.ok(mascotSource.indexOf('styles.backdrop') < mascotSource.indexOf('{children}'));
 });
