@@ -64,3 +64,10 @@ def get_gemini_model() -> str:
     if not gemini_model or not gemini_model.strip():
         return "gemini-3.6-flash"
     return gemini_model.strip()
+
+
+def get_supabase_service_role_key() -> str:
+    service_role_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    if not service_role_key or not service_role_key.strip():
+        raise RuntimeError("SUPABASE_SERVICE_ROLE_KEY 환경변수가 설정되어 있지 않다.")
+    return service_role_key.strip()

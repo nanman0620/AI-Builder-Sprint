@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 
 from app.core.errors import ApiError
@@ -13,7 +13,7 @@ from app.schemas.profile import (
     ProfileResponse,
     ProfileUpdateRequest,
 )
-from app.services import profile_service
+from app.services import account_deletion_service, profile_service
 
 router = APIRouter()
 
@@ -101,3 +101,16 @@ def update_profile(
         profile_out = to_profile_out(profile, email)
 
     return ProfileResponse(data=profile_out)
+
+
+# 최종 API 명세서 §12는 회원탈퇴를 "시연용 로컬 처리, FastAPI 호출 없음(DELETE /me 없음)"으로
+# 명시하지만, 사용자가 이를 확인한 뒤 명세서 범위를 넘어서는 추가 기능으로 명시적으로 요청해
+# 만든 endpoint다(docs/ai/AI_USAGE_LOG.md 참고). 프로필·앱 데이터가 이미 없어도 멱등하게
+# 동작하므로 get_current_user(JWT sub만 검증, 프로필 존재 비의존)를 그대로 쓴다.
+@router.delete("/me", status_code=204)
+def delete_me(
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    account_deletion_service.delete_account(db, current_user.id)
+    return Response(status_code=204)

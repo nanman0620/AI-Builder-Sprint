@@ -70,5 +70,6 @@ pytest
 | `SOLAR_API_KEY` | Upstage SOLAR(Chat Completions) API key. 서버 기동 시 필수로 검증된다 |
 | `SOLAR_BASE_URL` | SOLAR API base URL. 비워두면 `https://api.upstage.ai/v1` |
 | `SOLAR_MODEL` | 사용할 SOLAR 모델명. 비워두면 `solar-pro2` |
+| `SUPABASE_SERVICE_ROLE_KEY` | 회원탈퇴 시 Supabase Auth Admin API(`auth.users` 삭제) 전용. 서버 전용 secret이며 모바일 `.env`/`EXPO_PUBLIC_*`에는 절대 포함하지 않는다 |
 
 실제 값은 `.env.example`이 아니라 로컬 `apps/server/.env`(git 제외)에만 설정한다.
