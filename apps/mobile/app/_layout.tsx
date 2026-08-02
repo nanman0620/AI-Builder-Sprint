@@ -4,6 +4,7 @@ import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useRef } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -108,10 +109,12 @@ export default function RootLayout() {
   }
 
   return (
-    <BootstrapProvider>
-      <AppSyncProvider>
-        <RootNavigator />
-      </AppSyncProvider>
-    </BootstrapProvider>
+    <SafeAreaProvider>
+      <BootstrapProvider>
+        <AppSyncProvider>
+          <RootNavigator />
+        </AppSyncProvider>
+      </BootstrapProvider>
+    </SafeAreaProvider>
   );
 }

@@ -11,6 +11,10 @@ const homeHeaderSource = readFileSync(
   resolve(process.cwd(), 'src/features/home/components/home-header.tsx'),
   'utf8'
 );
+const homeMascotSource = readFileSync(
+  resolve(process.cwd(), 'src/features/home/components/home-mascot.tsx'),
+  'utf8'
+);
 const deadlineWarningListSource = readFileSync(
   resolve(process.cwd(), 'src/features/home/components/deadline-warning-list.tsx'),
   'utf8'
@@ -69,10 +73,19 @@ test('IN_PROGRESS 응원 문구는 한 줄에서만 축소되어 상점 크기�
   assert.match(homeHeaderSource, /feedback\.length > 22/);
   assert.match(homeHeaderSource, /feedbackCompact:\s*\{[\s\S]*?fontSize: 14/);
   assert.match(homeHeaderSource, /feedbackTight:\s*\{[\s\S]*?fontSize: 12/);
-  assert.match(homeHeaderSource, /height: headerContentHeight \*\s*0\.9/);
   assert.match(homeHeaderSource, /headerRow:\s*\{[\s\S]*?position: 'relative'/);
   assert.match(homeHeaderSource, /headerContent:\s*\{[\s\S]*?minWidth: 0/);
-  assert.match(homeHeaderSource, /shopButton:\s*\{[\s\S]*?position: 'absolute'[\s\S]*?right: -30/);
+  assert.match(homeHeaderSource, /headerContent:\s*\{[\s\S]*?paddingRight: SHOP_COLUMN_WIDTH/);
+  assert.match(homeHeaderSource, /shopButton:\s*\{[\s\S]*?position: 'absolute'[\s\S]*?right: 0/);
+  assert.doesNotMatch(homeHeaderSource, /headerContentHeight|onLayout/);
+  assert.match(homeHeaderSource, /shopIcon:\s*\{[\s\S]*?width: SHOP_ICON_WIDTH[\s\S]*?height: SHOP_ICON_HEIGHT/);
+});
+
+test('홈 마스코트와 stage는 작은 viewport의 가용 너비를 넘지 않는다', () => {
+  assert.match(homeMascotSource, /viewportWidth > 0 \? viewportWidth - spacing\.lg \* 2 : size/);
+  assert.match(homeMascotSource, /renderedSize = Math\.min\(size, availableWidth\)/);
+  assert.match(homeMascotSource, /stageSize = Math\.max\(contentSize, Math\.min\(290, availableWidth\)\)/);
+  assert.match(homeMascotSource, /r=\{stageSize \/ 2\}/);
 });
 
 test('NO_ACTIVE_CYCLE과 NO_PLANS가 상단 정렬 wrapper와 계획관리 CTA를 사용한다', () => {

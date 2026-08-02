@@ -2,7 +2,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Alert, Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors } from '@/src/constants/tokens';
 import { AuthSubmitButton } from '@/src/features/auth/components/auth-submit-button';
@@ -11,9 +10,11 @@ import { KakaoLoginButton } from '@/src/features/auth/components/kakao-login-but
 import { AUTH_NETWORK_ERROR_MESSAGE, toLoginErrorMessage } from '@/src/features/auth/errors';
 import { signInWithEmail, signInWithKakao } from '@/src/features/auth/services/auth-service';
 import { validateEmail, validateLoginPassword } from '@/src/features/auth/validation';
+import { useBootstrap } from '@/src/features/bootstrap/bootstrap-context';
 
 export function LoginScreen() {
   const router = useRouter();
+  const { reset: resetBootstrap } = useBootstrap();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -61,6 +62,7 @@ export function LoginScreen() {
     try {
       const result = await signInWithEmail(email.trim(), password);
       if (result.status === 'success') {
+        resetBootstrap();
         router.replace('/');
         return;
       }
@@ -79,6 +81,7 @@ export function LoginScreen() {
     try {
       const result = await signInWithKakao();
       if (result.status === 'success') {
+        resetBootstrap();
         router.replace('/');
         return;
       }
@@ -103,7 +106,7 @@ export function LoginScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['bottom']}>
+    <View style={styles.safeArea}>
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
           <View style={styles.frame}>
@@ -182,7 +185,7 @@ export function LoginScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </View>
   );
 }
 

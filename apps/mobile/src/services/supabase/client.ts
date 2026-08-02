@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { createClient, processLock, type SupabaseClient } from '@supabase/supabase-js';
+import { AppState, Platform } from 'react-native';
 
 import { env } from '@/src/utils/env';
 
@@ -14,8 +15,22 @@ export function getSupabaseClient(): SupabaseClient {
         autoRefreshToken: true,
         persistSession: true,
         detectSessionInUrl: false,
+        lock: processLock,
       },
     });
+
+    if (Platform.OS !== 'web') {
+      if (AppState.currentState === 'active') {
+        client.auth.startAutoRefresh();
+      }
+      AppState.addEventListener('change', (state) => {
+        if (state === 'active') {
+          client?.auth.startAutoRefresh();
+        } else {
+          client?.auth.stopAutoRefresh();
+        }
+      });
+    }
   }
   return client;
 }

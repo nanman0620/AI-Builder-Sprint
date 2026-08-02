@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -15,6 +13,7 @@ import { buildConversationTimeline } from '../logic';
 import type { SolarRequest } from '../types';
 import { ConversationTimeline } from './conversation-timeline';
 import { MessageInput } from './message-input';
+import { PlanKeyboardLayout } from './plan-keyboard-layout';
 
 type CollectingScreenProps = {
   request: SolarRequest;
@@ -48,7 +47,7 @@ export function CollectingScreen({ request, isSubmitting, actionError, onSendMes
   };
 
   return (
-    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <PlanKeyboardLayout>
       <ScrollView
         ref={scrollViewRef}
         contentContainerStyle={styles.content}
@@ -71,15 +70,11 @@ export function CollectingScreen({ request, isSubmitting, actionError, onSendMes
         placeholder={request.inputPlaceholder ?? undefined}
         disabled={isSubmitting}
       />
-    </KeyboardAvoidingView>
+    </PlanKeyboardLayout>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
   content: {
     padding: spacing.lg,
   },

@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Pressable, StyleSheet, TextInput, View } from 'react-native';
 
-import { PLAN_COMPOSER_BOTTOM_OFFSET } from '@/src/constants/tab-bar';
+import { PLAN_COMPOSER_RESTING_BOTTOM_MARGIN } from '@/src/constants/tab-bar';
 import { colors, spacing } from '@/src/constants/tokens';
 
 type MessageInputProps = {
@@ -55,7 +55,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
     backgroundColor: colors.background,
-    marginBottom: PLAN_COMPOSER_BOTTOM_OFFSET - 4,
+    marginBottom: PLAN_COMPOSER_RESTING_BOTTOM_MARGIN,
   },
   input: {
     flex: 1,

@@ -11,7 +11,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 
 import { ErrorView } from '@/src/components/common/error-view';
@@ -267,9 +266,9 @@ export default function SettingsProfileScreen() {
 
   if (isLoading) {
     return (
-      <SafeAreaView style={styles.centered} edges={['top']}>
+      <View style={styles.centered}>
         <ActivityIndicator size="large" color={PURPLE} />
-      </SafeAreaView>
+      </View>
     );
   }
 
@@ -278,7 +277,7 @@ export default function SettingsProfileScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top']}>
+    <View style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
           <Pressable onPress={() => router.back()} style={styles.backButton} hitSlop={8}>
@@ -321,7 +320,7 @@ export default function SettingsProfileScreen() {
         </View>
       </ScrollView>
       <Toast visible={toastVisible} message={toastMessage} opacity={toastOpacity} translateY={toastTranslateY} />
-    </SafeAreaView>
+    </View>
   );
 }
 

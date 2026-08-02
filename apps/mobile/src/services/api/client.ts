@@ -39,6 +39,7 @@ export class ApiClientError extends Error {
 // 인증 Issue·각 기능 Issue에서 이 함수를 사용해 21개 endpoint 호출을 구현한다.
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const url = `${env.apiBaseUrl}${path}`;
+  const body = options.body !== undefined ? JSON.stringify(options.body) : undefined;
 
   const headers = new Headers(options.headers);
   if (!headers.has('Content-Type')) {
@@ -68,10 +69,30 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     response = await fetch(url, {
       method: options.method ?? 'GET',
       headers,
-      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      body,
     });
   } catch {
     throw new ApiClientError(NETWORK_ERROR);
+  }
+
+  // bootstrap은 전달받은 token으로 자체 복구 순서를 관리한다. 그 외 API는 저장 session이
+  // 만료된 경우에만 한 번 refresh하고 같은 요청을 재전송한다. 첫 401은 인증 계층에서
+  // action이 실행되기 전에 거절된 응답이므로 mutation도 이 단회 재시도가 안전하다.
+  if (response.status === 401 && !options.accessToken) {
+    try {
+      const { data, error } = await getSupabaseClient().auth.refreshSession();
+      const refreshedAccessToken = data.session?.access_token;
+      if (!error && refreshedAccessToken) {
+        headers.set('Authorization', `Bearer ${refreshedAccessToken}`);
+        response = await fetch(url, {
+          method: options.method ?? 'GET',
+          headers,
+          body,
+        });
+      }
+    } catch {
+      // refresh 실패 또는 재요청 전송 실패 시 첫 401을 기존 오류 처리로 전달한다.
+    }
   }
 
   if (response.status === 204) {

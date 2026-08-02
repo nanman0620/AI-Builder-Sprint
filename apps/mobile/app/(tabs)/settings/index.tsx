@@ -2,7 +2,6 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ErrorView } from '@/src/components/common/error-view';
 import { colors, fonts } from '@/src/constants/tokens';
@@ -139,7 +138,7 @@ export default function SettingsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top']}>
+    <View style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
           <Text style={styles.headerTitle}>설정</Text>
@@ -192,7 +191,7 @@ export default function SettingsScreen() {
           onConfirm={handleLogout}
         />
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
