@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time
 from enum import Enum
 from typing import TypeAlias, TypeVar
 from zoneinfo import ZoneInfo
@@ -78,6 +78,173 @@ _CLEAR_TASK_RECURRENCE_PATTERNS = tuple(
 def has_clear_task_recurrence_intent(text: str) -> bool:
     """Return true only for explicit standalone recurrence expressions."""
     return any(pattern.search(text) for pattern in _CLEAR_TASK_RECURRENCE_PATTERNS)
+
+
+_KOREAN_WEEKDAYS = ("월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일")
+_QUOTED_TEXT_PATTERN = re.compile(r'["“”‘’][^"“”‘’]*["“”‘’]')
+_EXPLICIT_WEEKDAY_PATTERN = re.compile(
+    rf"(?<![\w가-힣])({'|'.join(_KOREAN_WEEKDAYS)})(?=$|\s|[에은는이가을를부터까지과와,])"
+)
+
+
+def extract_explicit_korean_weekdays(text: str) -> tuple[int, ...]:
+    """Extract unquoted, standalone Korean weekday mentions as Python weekday indexes.
+
+    This is deliberately lexical and conservative. Mentions that discuss or edit the
+    weekday word itself are not schedule evidence.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return ()
+    unquoted = _QUOTED_TEXT_PATTERN.sub(" ", text)
+    indexes: list[int] = []
+    for match in _EXPLICIT_WEEKDAY_PATTERN.finditer(unquoted):
+        suffix = unquoted[match.end():]
+        if re.match(r"\s*(?:이라는\s*단어|라는\s*단어|문장\s*(?:을\s*)?(?:교정|수정))", suffix):
+            continue
+        index = _KOREAN_WEEKDAYS.index(match.group(1))
+        if index not in indexes:
+            indexes.append(index)
+    return tuple(indexes)
+
+
+_ABSOLUTE_KOREAN_DATE_PATTERN = re.compile(
+    r"(?<!\d)(?:(?:\d{4})\s*년\s*)?\d{1,2}\s*월\s*\d{1,2}\s*일(?!\s*(?:마다|간격))"
+    r"|(?<!\d)\d{4}-\d{1,2}-\d{1,2}(?!\d)"
+)
+_EXPLICIT_TIME_PATTERN = re.compile(
+    r"(?:(?:오전|오후)\s*)?\d{1,2}\s*시(?:\s*\d{1,2}\s*분)?|(?<!\d)\d{1,2}:\d{2}(?!\d)"
+)
+_FIXED_SCHEDULE_RECURRENCE_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"(?<![\w가-힣])매주(?=\s|$)",
+        r"(?<![\w가-힣])격주(?=\s|$)",
+        rf"(?:{'|'.join(_KOREAN_WEEKDAYS)})마다(?=\s|$)",
+    )
+)
+
+
+def has_explicit_absolute_date(text: str) -> bool:
+    return bool(extract_explicit_absolute_dates(text))
+
+
+def extract_explicit_absolute_dates(text: str) -> tuple[str, ...]:
+    if not isinstance(text, str):
+        return ()
+    return tuple(match.group(0) for match in _ABSOLUTE_KOREAN_DATE_PATTERN.finditer(text))
+
+
+def extract_explicit_week_relation(text: str) -> str | None:
+    """Return THIS_WEEK/NEXT_WEEK only for an explicit, unambiguous week phrase."""
+    if not isinstance(text, str):
+        return None
+    this_week = re.search(r"이번\s*주|이번\s*(?:월요일|화요일|수요일|목요일|금요일|토요일|일요일)", text)
+    next_week = re.search(r"다음\s*주|다음\s*(?:월요일|화요일|수요일|목요일|금요일|토요일|일요일)", text)
+    if bool(this_week) == bool(next_week):
+        return None
+    return "THIS_WEEK" if this_week else "NEXT_WEEK"
+
+
+def has_explicit_time_range(text: str) -> bool:
+    return isinstance(text, str) and len(_EXPLICIT_TIME_PATTERN.findall(text)) >= 2
+
+
+_KOREAN_TIME_RANGE_PATTERN = re.compile(
+    r"(?P<start_meridiem>오전|오후)?\s*(?P<start_hour>\d{1,2})"
+    r"(?:(?::(?P<start_colon_minute>\d{2}))|(?:\s*시(?:\s*(?P<start_minute>\d{1,2})\s*분)?))"
+    r"\s*(?:부터|~|～|에서)\s*"
+    r"(?P<end_meridiem>오전|오후)?\s*(?P<end_hour>\d{1,2})"
+    r"(?:(?::(?P<end_colon_minute>\d{2}))|(?:\s*시(?:\s*(?P<end_minute>\d{1,2})\s*분)?))"
+    r"(?:\s*까지)?"
+)
+
+
+def _normalize_korean_clock_time(meridiem: str | None, hour: int, minute: int) -> time | None:
+    if not 0 <= minute <= 59:
+        return None
+    if meridiem is None:
+        return time(hour, minute) if 0 <= hour <= 23 else None
+    if not 1 <= hour <= 12:
+        return None
+    if meridiem == "오전":
+        hour = 0 if hour == 12 else hour
+    else:
+        hour = 12 if hour == 12 else hour + 12
+    return time(hour, minute)
+
+
+def extract_explicit_korean_time_range(text: str) -> tuple[time, time] | None:
+    """Parse an explicit Korean start/end clock range without inventing meridiem."""
+    if not isinstance(text, str):
+        return None
+    match = _KOREAN_TIME_RANGE_PATTERN.search(text)
+    if match is None:
+        return None
+    start_meridiem = match.group("start_meridiem")
+    end_meridiem = match.group("end_meridiem")
+    if start_meridiem is not None and end_meridiem is None:
+        return None
+    start_minute = int(match.group("start_colon_minute") or match.group("start_minute") or 0)
+    end_minute = int(match.group("end_colon_minute") or match.group("end_minute") or 0)
+    start = _normalize_korean_clock_time(start_meridiem, int(match.group("start_hour")), start_minute)
+    end = _normalize_korean_clock_time(end_meridiem, int(match.group("end_hour")), end_minute)
+    return (start, end) if start is not None and end is not None else None
+
+
+def has_ambiguous_korean_time_range(text: str) -> bool:
+    if not isinstance(text, str):
+        return False
+    match = _KOREAN_TIME_RANGE_PATTERN.search(text)
+    return bool(
+        match is not None
+        and match.group("start_meridiem") is not None
+        and match.group("end_meridiem") is None
+    )
+
+
+def has_clear_fixed_schedule_recurrence_intent(text: str) -> bool:
+    return isinstance(text, str) and any(
+        pattern.search(text) for pattern in _FIXED_SCHEDULE_RECURRENCE_PATTERNS
+    )
+
+
+def has_ambiguous_weekday_expression(text: str) -> bool:
+    if not isinstance(text, str):
+        return False
+    return bool(re.search(r"주말|이번\s*주쯤|다음\s*주쯤", text))
+
+
+_ITEM_CLAUSE_SPLIT_PATTERN = re.compile(
+    r"\s*(?:\r?\n|[,;]|해야\s*하고|하고|이며|그리고)\s*"
+)
+
+
+def extract_fixed_schedule_local_clause(text: str, *, title: str | None = None) -> str:
+    """Choose the clause with the strongest FixedSchedule weekday/time/title evidence.
+
+    If selection is not unique, preserve the original text so downstream validation
+    remains conservative instead of deleting arbitrary spans.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return text
+    clauses = [clause.strip() for clause in _ITEM_CLAUSE_SPLIT_PATTERN.split(text) if clause.strip()]
+    if len(clauses) <= 1:
+        return text.strip()
+
+    canonical_title = title.strip() if isinstance(title, str) and title.strip() else None
+    scored: list[tuple[int, str]] = []
+    for clause in clauses:
+        score = 0
+        if extract_explicit_korean_weekdays(clause):
+            score += 4
+        if has_explicit_time_range(clause):
+            score += 3
+        if canonical_title is not None and canonical_title in clause:
+            score += 2
+        scored.append((score, clause))
+    best_score = max(score for score, _ in scored)
+    best = [clause for score, clause in scored if score == best_score]
+    return best[0] if best_score > 0 and len(best) == 1 else text.strip()
 
 _TASK_PAYLOAD_KEYS = {
     "title", "deadlineAt", "estimatedMinutes", "estimatedMinutesSource",
@@ -1636,7 +1803,9 @@ def _build_prompt_messages(
 
     system_prompt = (
         "모든 TASK item에는 unsupportedIntent를 넣으세요. 매일, 매주, 평일마다, 주 3회처럼 "
-        "반복 수행 의도가 명확하면 값은 \"RECURRING_TASK\", 아니면 null입니다. 반복 의도를 "
+        "TASK 자체에 반복 수행 의도가 명확하면 값은 \"RECURRING_TASK\", 아니면 null입니다. "
+        "토요일에 알바 있어는 특정 토요일의 단일 일정이고, 매주 토요일에 알바 있어만 반복 "
+        "일정 의도입니다. 단일 요일만으로 TASK 반복 의도를 만들지 마세요. 반복 의도를 "
         "title이나 일반 필드에 흡수하지 말고, 회당 시간·분량을 Task 전체 시간·분량으로 "
         "확정하지 마세요. FIXED_SCHEDULE에는 이 필드를 넣지 마세요.\n\n"
         "당신은 '이음' 서비스에서 사용자의 자연어 입력을 분석해 할 일(TASK)·고정 일정"

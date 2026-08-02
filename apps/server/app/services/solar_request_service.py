@@ -1,10 +1,11 @@
 import logging
 import uuid
 from dataclasses import dataclass, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from enum import Enum
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Protocol
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, null, select, update
 from sqlalchemy.exc import IntegrityError
@@ -32,6 +33,8 @@ if TYPE_CHECKING:
     from app.services.plan_management_service import PlanManagementState
 
 logger = logging.getLogger(__name__)
+
+_SEOUL_TZ = ZoneInfo("Asia/Seoul")
 
 
 class Dispatcher(Protocol):
@@ -95,6 +98,106 @@ _DEFAULT_QUESTION_MESSAGES = {
     "startAt": "시작 시각이 언제인가요?",
     "endAt": "종료 시각이 언제인가요?",
 }
+
+_FIXED_SCHEDULE_DATE_QUESTION = "일정은 정확히 몇 월 며칠인가요? 시작과 종료 시각도 함께 알려주세요."
+
+
+def _fixed_schedule_date_question(item, final_payload: dict) -> tuple[object, dict]:
+    logger.warning(
+        "SOLAR_FIXED_SCHEDULE_DATE_REQUIRES_CONFIRMATION item_action=%s weekday_count=%d",
+        item.action,
+        len(solar_client.extract_explicit_korean_weekdays(item.raw_line_text)),
+    )
+    normalized_payload = dict(final_payload)
+    normalized_payload["startAt"] = None
+    normalized_payload["endAt"] = None
+    return replace(
+        item,
+        missing_fields=["startAt", "endAt"],
+        pending_question={
+            "field": "startAt",
+            "message": _FIXED_SCHEDULE_DATE_QUESTION,
+            "attemptCount": 1,
+        },
+    ), normalized_payload
+
+
+def _normalize_fixed_schedule_weekday(
+    item, final_payload: dict, *, now: datetime
+) -> tuple[object, dict]:
+    """Normalize one-off relative weekdays and reject ambiguous/contradictory dates."""
+    if item.entity_type != "FIXED_SCHEDULE" or item.action == "DELETE":
+        return item, final_payload
+    local_text = solar_client.extract_fixed_schedule_local_clause(
+        item.raw_line_text, title=final_payload.get("title")
+    )
+    weekdays = solar_client.extract_explicit_korean_weekdays(local_text)
+    if (
+        solar_client.has_ambiguous_weekday_expression(local_text)
+        or solar_client.has_clear_fixed_schedule_recurrence_intent(local_text)
+    ):
+        return _fixed_schedule_date_question(item, final_payload)
+    if not weekdays:
+        if solar_client.extract_explicit_week_relation(local_text) is not None:
+            return _fixed_schedule_date_question(item, final_payload)
+        return item, final_payload
+    start_at, end_at = final_payload.get("startAt"), final_payload.get("endAt")
+    if len(weekdays) != 1 or start_at is None or end_at is None:
+        return _fixed_schedule_date_question(item, final_payload)
+    if now.tzinfo is None or now.utcoffset() is None:
+        return _fixed_schedule_date_question(item, final_payload)
+
+    start_local = datetime.fromisoformat(start_at).astimezone(_SEOUL_TZ)
+    end_local = datetime.fromisoformat(end_at).astimezone(_SEOUL_TZ)
+    now_local = now.astimezone(_SEOUL_TZ)
+    target_weekday = weekdays[0]
+
+    raw_time_range = solar_client.extract_explicit_korean_time_range(local_text)
+    if raw_time_range is None:
+        if (
+            not solar_client.has_explicit_time_range(local_text)
+            or solar_client.has_ambiguous_korean_time_range(local_text)
+        ):
+            return _fixed_schedule_date_question(item, final_payload)
+    else:
+        raw_start_time, raw_end_time = raw_time_range
+        if (
+            (start_local.hour, start_local.minute) != (raw_start_time.hour, raw_start_time.minute)
+            or (end_local.hour, end_local.minute) != (raw_end_time.hour, raw_end_time.minute)
+        ):
+            return _fixed_schedule_date_question(item, final_payload)
+
+    if solar_client.has_explicit_absolute_date(local_text):
+        if start_local.weekday() == target_weekday and start_local > now_local:
+            return item, final_payload
+        return _fixed_schedule_date_question(item, final_payload)
+
+    week_relation = solar_client.extract_explicit_week_relation(local_text)
+    current_week_monday = now_local.date() - timedelta(days=now_local.weekday())
+    if week_relation == "THIS_WEEK":
+        target_date = current_week_monday + timedelta(days=target_weekday)
+    elif week_relation == "NEXT_WEEK":
+        target_date = current_week_monday + timedelta(days=7 + target_weekday)
+    else:
+        days_ahead = (target_weekday - now_local.weekday()) % 7
+        target_date = now_local.date() + timedelta(days=days_ahead)
+
+    normalized_start = start_local.replace(
+        year=target_date.year, month=target_date.month, day=target_date.day
+    )
+    if normalized_start <= now_local:
+        if week_relation is not None:
+            return _fixed_schedule_date_question(item, final_payload)
+        normalized_start += timedelta(days=7)
+    duration = end_local - start_local
+    normalized_end = normalized_start + duration
+    if duration.total_seconds() <= 0 or normalized_start.weekday() != target_weekday:
+        return _fixed_schedule_date_question(item, final_payload)
+
+    normalized_payload = dict(final_payload)
+    normalized_payload["startAt"] = normalized_start.isoformat()
+    normalized_payload["endAt"] = normalized_end.isoformat()
+    return item, normalized_payload
 
 # amount/deadlineAt은 DONT_KNOW를 두 번째로 답해도(더 물어볼 방법이 없어) 서버가 확정적인
 # "모름" 값으로 자동 해소한다. 그 외 필드(특히 estimatedMinutes)는 SOLAR가 attemptNumber>=2부터
@@ -359,13 +462,22 @@ def _persist_analysis(
     analysis,
     candidate_tasks: list[dict],
     candidate_fixed_schedules: list[dict],
+    now: datetime,
 ) -> SolarRequest:
     resolved_items: list[tuple] = []
     for item in analysis.items:
-        recurring_task = item.entity_type == "TASK" and item.action != "DELETE" and (
-            item.unsupported_intent == solar_client.UNSUPPORTED_RECURRING_TASK_INTENT
-            or solar_client.has_clear_task_recurrence_intent(item.raw_line_text)
+        raw_line_recurring = solar_client.has_clear_task_recurrence_intent(item.raw_line_text)
+        recurring_task = (
+            item.entity_type == "TASK" and item.action != "DELETE" and raw_line_recurring
         )
+        if (
+            item.entity_type == "TASK"
+            and item.unsupported_intent == solar_client.UNSUPPORTED_RECURRING_TASK_INTENT
+            and not raw_line_recurring
+        ):
+            logger.warning(
+                "SOLAR_RECURRING_TASK_MARKER_REJECTED item_action=%s", item.action
+            )
         if recurring_task:
             item = replace(
                 item,
@@ -401,6 +513,7 @@ def _persist_analysis(
                 amountSource=None,
             )
             final_payload[_UNSUPPORTED_INTENT_PAYLOAD_KEY] = solar_client.UNSUPPORTED_RECURRING_TASK_INTENT
+        item, final_payload = _normalize_fixed_schedule_weekday(item, final_payload, now=now)
         resolved_items.append((item, final_payload))
 
     has_missing = any(item.missing_fields for item, _ in resolved_items)
@@ -624,6 +737,7 @@ def create_solar_request(
                     analysis=analysis,
                     candidate_tasks=candidate_tasks,
                     candidate_fixed_schedules=candidate_fixed_schedules,
+                    now=now,
                 )
                 created = True
     except IntegrityError as exc:
