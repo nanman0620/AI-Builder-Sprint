@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Alert, Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { colors } from '@/src/constants/tokens';
 import { AuthSubmitButton } from '@/src/features/auth/components/auth-submit-button';
@@ -11,6 +11,7 @@ import { AUTH_NETWORK_ERROR_MESSAGE, toLoginErrorMessage } from '@/src/features/
 import { signInWithEmail, signInWithKakao } from '@/src/features/auth/services/auth-service';
 import { validateEmail, validateLoginPassword } from '@/src/features/auth/validation';
 import { useBootstrap } from '@/src/features/bootstrap/bootstrap-context';
+import { showAlert } from '@/src/utils/alert';
 
 export function LoginScreen() {
   const router = useRouter();
@@ -95,7 +96,7 @@ export function LoginScreen() {
   }
 
   function handleForgotPassword() {
-    Alert.alert('준비 중', '비밀번호 찾기 기능은 아직 준비 중이에요.');
+    showAlert('준비 중', '비밀번호 찾기 기능은 아직 준비 중이에요.');
   }
 
   function handleGoToSignUp() {

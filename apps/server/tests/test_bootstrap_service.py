@@ -141,11 +141,15 @@ def test_missing_profile_row_is_treated_as_onboarding_not_completed(patch_depend
     assert state.profile.email == EMAIL
 
 
-def test_missing_email_raises_runtime_error(patch_dependencies):
-    patch_dependencies(profile=_make_profile(), email=None)
+def test_missing_email_falls_back_to_empty_string(patch_dependencies):
+    # 카카오 OAuth는 이메일 동의항목이 승인되지 않으면 auth.users.email이 NULL일 수 있다.
+    # bootstrap은 이 경우에도 실패하지 않고 빈 문자열로 대체한다.
+    patch_dependencies(profile=_make_profile(onboarding_completed=False, nickname=None), email=None)
 
-    with pytest.raises(RuntimeError):
-        bootstrap_service.get_bootstrap_state(_NoQuerySession(), USER_ID, now=NOW)
+    state = bootstrap_service.get_bootstrap_state(_NoQuerySession(), USER_ID, now=NOW)
+
+    assert state.profile.email == ""
+    assert state.initial_screen == bootstrap_service.InitialScreen.NICKNAME_CREATION
 
 
 def test_no_active_cycle_uses_home_mode_as_initial_screen(patch_dependencies):

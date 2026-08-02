@@ -19,9 +19,12 @@ export type KakaoSignInResult =
   | { status: 'cancelled' }
   | { status: 'error' };
 
+export type SignOutOptions = { scope?: 'global' | 'local' | 'others' };
+
 // bootstrap의 AUTH_REQUIRED 처리(로그인 Route 이동 전 session 정리)가 사용한다.
-export async function signOut(): Promise<void> {
-  await getSupabaseClient().auth.signOut();
+// options 생략 시 기존과 동일하게 supabase-js 기본값(scope: 'global')으로 동작한다.
+export async function signOut(options?: SignOutOptions): Promise<void> {
+  await getSupabaseClient().auth.signOut(options);
 }
 
 export async function refreshAccessToken(): Promise<string | null> {
