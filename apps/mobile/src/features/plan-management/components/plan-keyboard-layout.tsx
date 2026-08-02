@@ -1,7 +1,6 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import {
   Keyboard,
-  KeyboardAvoidingView,
   Platform,
   StyleSheet,
   useWindowDimensions,
@@ -13,10 +12,16 @@ import { colors } from '@/src/constants/tokens';
 import { PLAN_COMPOSER_RESTING_BOTTOM_MARGIN } from '@/src/constants/tab-bar';
 
 const COMPOSER_KEYBOARD_GAP = 8;
+const PlanKeyboardVisibleContext = createContext(false);
+
+export function usePlanKeyboardVisible(): boolean {
+  return useContext(PlanKeyboardVisibleContext);
+}
 
 export function PlanKeyboardLayout({ children }: { children: ReactNode }) {
   const { height: windowHeight } = useWindowDimensions();
   const [keyboardInset, setKeyboardInset] = useState(0);
+  const [isAndroidKeyboardVisible, setIsAndroidKeyboardVisible] = useState(false);
   const keyboardPadding = Math.max(
     0,
     keyboardInset + COMPOSER_KEYBOARD_GAP - PLAN_COMPOSER_RESTING_BOTTOM_MARGIN,
@@ -46,22 +51,34 @@ export function PlanKeyboardLayout({ children }: { children: ReactNode }) {
     };
   }, [windowHeight]);
 
-  if (Platform.OS === 'android') {
-    return (
-      <KeyboardAvoidingView behavior="height" style={styles.layout}>
-        {children}
-      </KeyboardAvoidingView>
-    );
-  }
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      return;
+    }
+
+    const showSubscription = Keyboard.addListener('keyboardDidShow', () => {
+      setIsAndroidKeyboardVisible(true);
+    });
+    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
+      setIsAndroidKeyboardVisible(false);
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
 
   return (
-    <View
-      style={[
-        styles.layout,
-        keyboardInset > 0 ? { paddingBottom: keyboardPadding } : null,
-      ]}>
-      {children}
-    </View>
+    <PlanKeyboardVisibleContext.Provider value={isAndroidKeyboardVisible}>
+      <View
+        style={[
+          styles.layout,
+          keyboardInset > 0 ? { paddingBottom: keyboardPadding } : null,
+        ]}>
+        {children}
+      </View>
+    </PlanKeyboardVisibleContext.Provider>
   );
 }
 

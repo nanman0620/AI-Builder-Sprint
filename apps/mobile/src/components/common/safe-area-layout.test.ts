@@ -55,7 +55,21 @@ test('plan composer follows the real iOS keyboard frame with a small gap', () =>
     /keyboardInset \+ COMPOSER_KEYBOARD_GAP - PLAN_COMPOSER_RESTING_BOTTOM_MARGIN/,
   );
   assert.match(keyboardLayout, /paddingBottom: keyboardPadding/);
-  assert.match(keyboardLayout, /Platform\.OS === 'android'[\s\S]*?behavior="height"/);
+});
+
+test('Android plan composer relies on resize mode and keeps an explicit keyboard gap', () => {
+  const keyboardLayout = source(
+    'src/features/plan-management/components/plan-keyboard-layout.tsx',
+  );
+  const messageInput = source('src/features/plan-management/components/message-input.tsx');
+  const appConfig = source('app.json');
+
+  assert.doesNotMatch(keyboardLayout, /KeyboardAvoidingView/);
+  assert.match(keyboardLayout, /keyboardDidShow/);
+  assert.match(keyboardLayout, /keyboardDidHide/);
+  assert.match(messageInput, /isAndroidKeyboardVisible[\s\S]*?styles\.androidKeyboardGap/);
+  assert.match(messageInput, /androidKeyboardGap:[\s\S]*?marginBottom: COMPOSER_KEYBOARD_GAP/);
+  assert.match(appConfig, /"softwareKeyboardLayoutMode": "resize"/);
 });
 
 test('auth shell owns top and bottom safe areas while web keeps existing spacing', () => {

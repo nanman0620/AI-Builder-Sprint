@@ -1,8 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { PLAN_COMPOSER_RESTING_BOTTOM_MARGIN } from '@/src/constants/tab-bar';
 import { colors, spacing } from '@/src/constants/tokens';
+
+import { usePlanKeyboardVisible } from './plan-keyboard-layout';
+
+const COMPOSER_KEYBOARD_GAP = 8;
 
 type MessageInputProps = {
   value: string;
@@ -19,10 +23,17 @@ export function MessageInput({
   placeholder = '메세지를 입력하세요',
   disabled = false,
 }: MessageInputProps) {
+  const isAndroidKeyboardVisible = usePlanKeyboardVisible();
   const canSubmit = !disabled && value.trim().length > 0;
 
   return (
-    <View style={styles.container}>
+    <View
+      style={[
+        styles.container,
+        Platform.OS === 'android' && isAndroidKeyboardVisible
+          ? styles.androidKeyboardGap
+          : null,
+      ]}>
       <TextInput
         style={styles.input}
         value={value}
@@ -56,6 +67,9 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
     backgroundColor: colors.background,
     marginBottom: PLAN_COMPOSER_RESTING_BOTTOM_MARGIN,
+  },
+  androidKeyboardGap: {
+    marginBottom: COMPOSER_KEYBOARD_GAP,
   },
   input: {
     flex: 1,

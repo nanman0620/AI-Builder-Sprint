@@ -157,6 +157,8 @@ Claude Code 또는 Codex가 분석·기획·설계·구현·테스트·검증·�
 
 | 2026-08-02 | Codex / GPT-5.6 Sol | 인증 경쟁 상태 분석·수정·검증 | 로그인 직후 이전 bootstrap 401이 새 세션을 제거하는 문제 방지 | 이전 세션으로 시작한 bootstrap 요청의 401이 새 이메일·카카오 로그인 완료 뒤 도착하면 기존 코드가 무조건 signOut하여 새 세션까지 삭제할 수 있음을 확인했다. 로그인 성공 시 진행 중인 bootstrap 요청을 무효화하고, bootstrap은 최신 요청이면서 현재 세션 token이 실제 실패한 token과 같은 경우에만 signOut하도록 제한했다. 회원가입·회원탈퇴 기능 변경은 팀원의 별도 DB 작업과 충돌하지 않도록 원복했고 Safe Area만 유지했다. | 변경 관련 구조 테스트 30 passed, `npx.cmd tsc --noEmit`, `npm.cmd run lint`, `npx.cmd expo export --platform web`, `git diff --check` 통과. | 실제 배포 API에 대한 로그인 수동 검증은 필요하다. 서버·API·DB·dependency 변경 없음. commit·push·merge는 PR 생성 전 기준 미수행. |
 
+| 2026-08-02 | Codex / GPT-5.6 Sol | Android APK 키보드 회귀 수정·검증 | Samsung 키보드에서 계획관리 입력창 하단 잘림 및 간격 안정화 | Android는 OS resize와 `KeyboardAvoidingView behavior=height`가 중복 적용되어 composer의 기존 하단 margin이 keyboard toolbar 경계에서 잘릴 수 있음을 확인했다. APK 설정에 `softwareKeyboardLayoutMode: resize`를 명시하고 Android의 추가 높이 보정을 제거했다. `keyboardDidShow`/`keyboardDidHide` 상태를 공통 layout에서 제공해 키보드가 열린 동안에만 `MessageInput` 하단 간격을 8dp로 전환했다. iOS frame 기반 보정, Web layout, tab bar style은 유지했다. | Android resize·8dp gap 회귀를 포함한 관련 테스트 16 passed. `npx.cmd tsc --noEmit`, `npm.cmd run lint`, `npx.cmd expo config --type public`, `npx.cmd expo export --platform web`, `git diff --check` 통과. | 실제 Samsung 키보드가 포함된 새 APK/개발 빌드에서 최종 간격 수동 확인 필요. 서버·API·DB·dependency 변경 없음. |
+
 ## 작업 단계
 
 - 분석
