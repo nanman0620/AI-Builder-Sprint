@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import {
   applyOptimisticCheckState,
   computeOptimisticProgress,
+  formatDeadlineLabel,
   formatLogicalDateBadge,
   formatPeriodLabel,
   PlanBlockPendingRegistry,
@@ -290,4 +291,14 @@ test('A 실패 후 B 성공이어도 늦은 A rollback이 B를 덮지 않는다'
 test('logicalDate 배지 포맷은 기기 로컬 타임존과 무관하게 같은 날짜를 표시한다', () => {
   assert.equal(formatLogicalDateBadge('2026-07-26'), '7월 26일 일요일');
   assert.equal(formatLogicalDateBadge('2026-01-01'), '1월 1일 목요일');
+});
+
+test('마감 라벨은 logicalDate 기준으로 오늘·내일·그 외 날짜를 구분한다', () => {
+  assert.equal(formatDeadlineLabel('2026-07-26T23:59:59+09:00', '2026-07-26'), '오늘 23:59 마감');
+  assert.equal(formatDeadlineLabel('2026-07-27T09:00:00+09:00', '2026-07-26'), '내일 09:00 마감');
+  assert.equal(formatDeadlineLabel('2026-08-02T18:30:00+09:00', '2026-07-26'), '8월 2일 18:30 마감');
+});
+
+test('마감 라벨의 내일 계산은 월 경계에서도 로컬 타임존과 무관하게 맞다', () => {
+  assert.equal(formatDeadlineLabel('2026-08-01T00:00:00+09:00', '2026-07-31'), '내일 00:00 마감');
 });

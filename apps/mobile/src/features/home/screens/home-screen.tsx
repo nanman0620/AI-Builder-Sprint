@@ -87,10 +87,15 @@ export function HomeScreen() {
           badgeLabel="마감 임박"
           title="마감이 가까운 일이 있어요"
           description="가능한 만큼 먼저 배치했지만, 마감 전 시간이 조금 부족해요."
+          showShopIcon={false}
+          titleStyle={styles.deadlineWarningTitle}
+          descriptionStyle={styles.deadlineWarningDescription}
+          descriptionNumberOfLines={1}
         />
-        <HomeMascot mascotKey={resolveHomeMascotKey('DEADLINE_WARNING')} style={styles.centerMascot} />
+        <HomeMascot mascotKey={resolveHomeMascotKey('DEADLINE_WARNING')} size={235} style={styles.centerMascot} />
         <DeadlineWarningList
           items={data.blockingNotice.items}
+          logicalDate={data.logicalDate}
           isSubmitting={isDeadlineAckPending}
           error={deadlineAckError}
           onAcknowledge={() => acknowledgeDeadlineWarnings(data.blockingNotice!.items)}
@@ -258,6 +263,17 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  deadlineWarningTitle: {
+    fontSize: 20,
+    fontFamily: fonts.bold,
+    color: colors.deadlineCardTitle,
+    marginLeft: 0,
+  },
+  deadlineWarningDescription: {
+    fontSize: 12,
+    fontFamily: fonts.regular,
+    color: colors.deadlineDescriptionText,
   },
   emptyStateScroll: {
     flex: 1,
