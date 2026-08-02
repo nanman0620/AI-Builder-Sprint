@@ -2,6 +2,8 @@ import uuid
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from app.models.enums import AmountSource, PlanPeriod
 from app.services import plan_block_service as svc
 from tests.support_scheduler import (
@@ -195,3 +197,167 @@ def test_daily_quota_integer_remainder_is_assigned_to_earliest_dates():
     dates = [date(2026, 8, day) for day in range(2, 6)]
     assert svc._distribute_daily_quotas(150, dates) == dict(zip(dates, [38, 38, 37, 37]))
     assert svc._distribute_daily_quotas(2, dates) == dict(zip(dates, [1, 1, 0, 0]))
+
+
+def test_two_problems_use_two_evenly_spaced_dates_across_six_eligible_dates():
+    user_id, cycle_id, db = _setup_cycle()
+    now = datetime(2026, 8, 2, 4, 0, tzinfo=SEOUL)
+    task = make_task(
+        user_id=user_id, plan_cycle_id=cycle_id, remaining_minutes=240,
+        deadline_at=datetime(2026, 8, 7, 23, 59, 59, tzinfo=SEOUL),
+        title="운영체제 과제", amount_text="2문제", amount_source=AmountSource.USER,
+        created_at=now,
+    )
+    db.seed(task)
+
+    result = svc.schedule_plan_blocks(db, user_id=user_id, plan_cycle_id=cycle_id, now=now)
+    blocks = sorted(result.created_blocks, key=lambda block: block.plan_date)
+
+    assert [block.plan_date for block in blocks] == [date(2026, 8, 2), date(2026, 8, 5)]
+    assert [block.allocated_minutes for block in blocks] == [120, 120]
+    assert [block.allocated_amount_text for block in blocks] == ["1문제", "1문제"]
+    assert sum(block.allocated_minutes for block in blocks) == 240
+    assert result.total_unplaced_minutes == 0
+
+
+def test_three_problems_use_three_evenly_spaced_dates_across_seven_eligible_dates():
+    user_id, cycle_id, db = _setup_cycle()
+    now = datetime(2026, 8, 2, 4, 0, tzinfo=SEOUL)
+    task = make_task(
+        user_id=user_id, plan_cycle_id=cycle_id, remaining_minutes=300,
+        deadline_at=datetime(2026, 8, 8, 23, 59, 59, tzinfo=SEOUL),
+        title="알고리즘 문제", amount_text="3문제", amount_source=AmountSource.USER,
+        created_at=now,
+    )
+    db.seed(task)
+
+    result = svc.schedule_plan_blocks(db, user_id=user_id, plan_cycle_id=cycle_id, now=now)
+    blocks = sorted(result.created_blocks, key=lambda block: block.plan_date)
+
+    assert [block.plan_date for block in blocks] == [
+        date(2026, 8, 2), date(2026, 8, 4), date(2026, 8, 6),
+    ]
+    assert [block.allocated_minutes for block in blocks] == [100, 100, 100]
+    assert [block.allocated_amount_text for block in blocks] == ["1문제"] * 3
+    assert result.total_unplaced_minutes == 0
+
+
+def test_quantity_larger_than_horizon_keeps_all_eligible_dates():
+    user_id, cycle_id, db = _setup_cycle()
+    now = datetime(2026, 8, 2, 4, 0, tzinfo=SEOUL)
+    task = make_task(
+        user_id=user_id, plan_cycle_id=cycle_id, remaining_minutes=400,
+        deadline_at=datetime(2026, 8, 5, 23, 59, 59, tzinfo=SEOUL),
+        title="연습 문제", amount_text="10문제", amount_source=AmountSource.USER,
+        created_at=now,
+    )
+    db.seed(task)
+
+    result = svc.schedule_plan_blocks(db, user_id=user_id, plan_cycle_id=cycle_id, now=now)
+    blocks = sorted(result.created_blocks, key=lambda block: block.plan_date)
+
+    assert [block.plan_date for block in blocks] == [date(2026, 8, day) for day in range(2, 6)]
+    assert [block.allocated_minutes for block in blocks] == [100] * 4
+    assert [block.allocated_amount_text for block in blocks] == ["3문제", "3문제", "2문제", "2문제"]
+
+
+def test_capacity_shortage_opens_only_minimum_dates_after_last_target():
+    user_id, cycle_id, db = _setup_cycle()
+    now = datetime(2026, 8, 2, 4, 0, tzinfo=SEOUL)
+    task = make_task(
+        user_id=user_id, plan_cycle_id=cycle_id, remaining_minutes=900,
+        deadline_at=datetime(2026, 8, 7, 23, 59, 59, tzinfo=SEOUL),
+        title="긴 과제", amount_text="1문제", amount_source=AmountSource.USER,
+        created_at=now,
+    )
+    db.seed(task)
+
+    result = svc.schedule_plan_blocks(db, user_id=user_id, plan_cycle_id=cycle_id, now=now)
+
+    assert sorted({block.plan_date for block in result.created_blocks}) == [
+        date(2026, 8, 2), date(2026, 8, 3),
+    ]
+    assert sum(block.allocated_minutes for block in result.created_blocks) == 900
+    assert result.total_unplaced_minutes == 0
+    assert all(block.allocated_amount_text is None for block in result.created_blocks)
+
+
+def test_unknown_canonical_amount_does_not_limit_deadline_distribution_dates():
+    user_id, cycle_id, db = _setup_cycle()
+    now = datetime(2026, 8, 2, 4, 0, tzinfo=SEOUL)
+    task = make_task(
+        user_id=user_id, plan_cycle_id=cycle_id, remaining_minutes=60,
+        deadline_at=datetime(2026, 8, 7, 23, 59, 59, tzinfo=SEOUL),
+        amount_text="2문제", amount_source=AmountSource.UNKNOWN, created_at=now,
+    )
+    db.seed(task)
+
+    result = svc.schedule_plan_blocks(db, user_id=user_id, plan_cycle_id=cycle_id, now=now)
+
+    assert _daily_minutes(result.created_blocks) == {
+        date(2026, 8, day): 10 for day in range(2, 8)
+    }
+    assert all(block.allocated_amount_text is None for block in result.created_blocks)
+
+
+def test_target_date_selection_is_deterministic_increasing_and_in_range():
+    dates = [date(2026, 8, day) for day in range(2, 8)]
+    assert svc._select_evenly_spaced_target_dates(dates, 2) == [dates[0], dates[3]]
+    assert svc._select_evenly_spaced_target_dates(dates, 3) == [dates[0], dates[2], dates[4]]
+
+
+@pytest.mark.parametrize(("quantity", "unit"), [(2, "페이지"), (3, "개"), (4, "단원")])
+def test_target_date_limit_reuses_canonical_amount_parser_for_any_unit(quantity, unit):
+    user_id, cycle_id, db = _setup_cycle()
+    now = datetime(2026, 8, 2, 4, 0, tzinfo=SEOUL)
+    task = make_task(
+        user_id=user_id, plan_cycle_id=cycle_id, remaining_minutes=quantity * 60,
+        deadline_at=datetime(2026, 8, 7, 23, 59, 59, tzinfo=SEOUL),
+        amount_text=f"{quantity}{unit}", amount_source=AmountSource.USER, created_at=now,
+    )
+    db.seed(task)
+
+    result = svc.schedule_plan_blocks(db, user_id=user_id, plan_cycle_id=cycle_id, now=now)
+
+    assert len({block.plan_date for block in result.created_blocks}) == quantity
+    assert sum(int(block.allocated_amount_text.removesuffix(unit)) for block in result.created_blocks) == quantity
+    assert all(not block.allocated_amount_text.startswith("0") for block in result.created_blocks)
+
+
+def test_shortage_carries_to_next_selected_date_then_opens_one_expansion_date():
+    user_id, cycle_id, db = _setup_cycle()
+    now = datetime(2026, 8, 2, 4, 0, tzinfo=SEOUL)
+    task = make_task(
+        user_id=user_id, plan_cycle_id=cycle_id, remaining_minutes=1500,
+        deadline_at=datetime(2026, 8, 7, 23, 59, 59, tzinfo=SEOUL),
+        amount_text="2문제", amount_source=AmountSource.USER, created_at=now,
+    )
+    db.seed(task)
+
+    result = svc.schedule_plan_blocks(db, user_id=user_id, plan_cycle_id=cycle_id, now=now)
+
+    assert _daily_minutes(result.created_blocks) == {
+        date(2026, 8, 2): 720,
+        date(2026, 8, 5): 720,
+        date(2026, 8, 6): 60,
+    }
+    assert result.total_unplaced_minutes == 0
+
+
+def test_completed_amount_history_keeps_all_eligible_dates_in_time_distribution():
+    user_id, cycle_id, _db = _setup_cycle()
+    now = datetime(2026, 8, 2, 4, 0, tzinfo=SEOUL)
+    task = make_task(
+        user_id=user_id, plan_cycle_id=cycle_id, remaining_minutes=60,
+        amount_text="2문제", amount_source=AmountSource.USER, created_at=now,
+    )
+    dates = [date(2026, 8, day) for day in range(2, 8)]
+
+    quotas = svc._build_task_daily_quotas(
+        task=task,
+        effective_need=60,
+        eligible_dates=dates,
+        has_completed_amount_history=True,
+    )
+
+    assert quotas == {plan_date: 10 for plan_date in dates}
