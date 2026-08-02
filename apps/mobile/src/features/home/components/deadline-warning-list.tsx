@@ -17,6 +17,8 @@ type DeadlineWarningListProps = {
 // UI-008(복수)·UI-009(단일)이 공유하는 단 하나의 목록 컴포넌트. items.length만 다르다(§8).
 // 자동 acknowledge·자동 이동·타이머 기반 이동은 만들지 않는다. 실패 시 이 목록과 화면을 그대로 유지한다.
 export function DeadlineWarningList({ items, logicalDate, isSubmitting, error, onAcknowledge }: DeadlineWarningListProps) {
+  const lastItem = items[items.length - 1];
+
   return (
     <View style={styles.container}>
       <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
@@ -57,12 +59,14 @@ export function DeadlineWarningList({ items, logicalDate, isSubmitting, error, o
                 </View>
               </View>
             </View>
-            <Text style={styles.cardDescription}>
-              오후·저녁에 {item.availableMinutes}분을 우선 배치했어요.{'\n'}
-              남은 {item.shortageMinutes}분은 할 일에 그대로 남겨뒀어요.
-            </Text>
           </View>
         ))}
+        {lastItem ? (
+          <Text style={styles.cardDescription}>
+            오후·저녁에 {lastItem.availableMinutes}분을 우선 배치했어요.{'\n'}
+            남은 {lastItem.shortageMinutes}분은 할 일에 그대로 남겨뒀어요.
+          </Text>
+        ) : null}
       </ScrollView>
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <Pressable
