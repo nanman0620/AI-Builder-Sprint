@@ -92,7 +92,12 @@ export function HomeScreen() {
           descriptionStyle={styles.deadlineWarningDescription}
           descriptionNumberOfLines={1}
         />
-        <HomeMascot mascotKey={resolveHomeMascotKey('DEADLINE_WARNING')} size={235} style={styles.centerMascot} />
+        <HomeMascot
+          mascotKey={resolveHomeMascotKey('DEADLINE_WARNING')}
+          size={235}
+          showBackdrop={false}
+          style={styles.centerMascot}
+        />
         <DeadlineWarningList
           items={data.blockingNotice.items}
           logicalDate={data.logicalDate}

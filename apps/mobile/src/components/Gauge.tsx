@@ -27,6 +27,7 @@ const DEMO_TEXT_COLOR = '#5E267A';
 export type GaugeProps = {
   progress: number;
   width?: number;
+  showCompletionEffect?: boolean;
 };
 
 type CloudParticleConfig = {
@@ -137,7 +138,7 @@ function CloudParticle({
   );
 }
 
-export function Gauge({ progress, width = TRACK_WIDTH }: GaugeProps) {
+export function Gauge({ progress, width = TRACK_WIDTH, showCompletionEffect = false }: GaugeProps) {
   const clampedProgress = clampProgress(progress);
   const gaugeWidth = Number.isFinite(width) && width > 0 ? width : TRACK_WIDTH;
   const prefersReducedMotion = usePrefersReducedMotion();
@@ -217,6 +218,11 @@ export function Gauge({ progress, width = TRACK_WIDTH }: GaugeProps) {
     const previous = previousProgress.current;
     previousProgress.current = clampedProgress;
 
+    if (!showCompletionEffect) {
+      setParticles([]);
+      return;
+    }
+
     if (prefersReducedMotion) {
       setParticles([]);
       return;
@@ -235,7 +241,7 @@ export function Gauge({ progress, width = TRACK_WIDTH }: GaugeProps) {
       size: 14 + Math.random() * 10,
     }));
     setParticles((current) => [...current, ...newParticles]);
-  }, [clampedProgress, prefersReducedMotion]);
+  }, [clampedProgress, prefersReducedMotion, showCompletionEffect]);
 
   const fillWidth = gaugeWidth * (renderedProgress / 100);
   const highlightX = gaugeWidth * (renderedProgress / 100);
@@ -270,7 +276,7 @@ export function Gauge({ progress, width = TRACK_WIDTH }: GaugeProps) {
           />
         ) : null}
       </View>
-      {prefersReducedMotion === false && particles.length > 0 ? (
+      {showCompletionEffect && prefersReducedMotion === false && particles.length > 0 ? (
         <View style={styles.particleLayer}>
           {particles.map((particle) => (
             <CloudParticle
@@ -291,7 +297,7 @@ export function GaugeDemo() {
 
   return (
     <View style={styles.demo}>
-      <Gauge progress={progress} />
+      <Gauge progress={progress} showCompletionEffect />
       <View style={styles.demoButtons}>
         {[0, 30, 70, 100].map((value) => (
           <Pressable

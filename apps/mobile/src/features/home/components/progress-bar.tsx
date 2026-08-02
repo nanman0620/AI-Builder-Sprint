@@ -16,7 +16,7 @@ export function ProgressBar({ percentage }: ProgressBarProps) {
   return (
     <View style={styles.container}>
       <Text style={styles.label}>{clamped}% 달성</Text>
-      <Gauge progress={clamped} width={gaugeWidth} />
+      <Gauge progress={clamped} width={gaugeWidth} showCompletionEffect={false} />
     </View>
   );
 }

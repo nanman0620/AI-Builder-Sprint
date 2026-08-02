@@ -347,6 +347,32 @@ test('마감 라벨은 logicalDate 기준으로 오늘·내일·그 외 날짜�
   assert.equal(formatDeadlineLabel('2026-08-02T18:30:00+09:00', '2026-07-26'), '8월 2일 18:30 마감');
 });
 
+test('마감 라벨은 UTC와 +09:00 ISO를 모두 Asia/Seoul 시각으로 표시한다', () => {
+  assert.equal(formatDeadlineLabel('2026-08-02T09:00:00Z', '2026-08-02'), '오늘 18:00 마감');
+  assert.equal(formatDeadlineLabel('2026-08-02T18:00:00+09:00', '2026-08-02'), '오늘 18:00 마감');
+});
+
+test('마감 라벨은 실행 환경 timezone과 무관하다', () => {
+  const originalTimezone = process.env.TZ;
+  try {
+    for (const timezone of ['UTC', 'America/Los_Angeles', 'Asia/Tokyo']) {
+      process.env.TZ = timezone;
+      assert.equal(formatDeadlineLabel('2026-08-02T09:00:00Z', '2026-08-02'), '오늘 18:00 마감');
+    }
+  } finally {
+    if (originalTimezone === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = originalTimezone;
+    }
+  }
+});
+
+test('UTC 자정 경계는 Asia/Seoul 날짜로 오늘·내일을 판정한다', () => {
+  assert.equal(formatDeadlineLabel('2026-08-02T18:30:00Z', '2026-08-02'), '내일 03:30 마감');
+  assert.equal(formatDeadlineLabel('2026-08-02T18:30:00Z', '2026-08-01'), '8월 3일 03:30 마감');
+});
+
 test('마감 라벨의 내일 계산은 월 경계에서도 로컬 타임존과 무관하게 맞다', () => {
   assert.equal(formatDeadlineLabel('2026-08-01T00:00:00+09:00', '2026-07-31'), '내일 00:00 마감');
 });

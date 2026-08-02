@@ -182,12 +182,22 @@ export function formatLogicalDateBadge(logicalDate: string): string {
   return formatter.format(date);
 }
 
-// deadlineAt은 항상 "+09:00" 오프셋을 포함한 ISO 문자열이라(§8 마감 경고 예시) Date 파싱 없이
-// 앞 10자(YYYY-MM-DD)·11~16자(HH:mm)를 그대로 잘라 쓴다. logicalDate와 같은 "YYYY-MM-DD" 형식만 비교하므로
-// 기기 로컬 타임존 영향을 받지 않는다. 마감일이 오늘·내일이 아니면 "M월 D일"로 표시한다.
+const SEOUL_DEADLINE_FORMATTER = new Intl.DateTimeFormat('ko-KR', {
+  timeZone: 'Asia/Seoul',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+// deadlineAt의 오프셋 표기(Z/+09:00)와 실행 기기의 timezone에 관계없이 서울 기준 날짜·시각으로 표시한다.
 export function formatDeadlineLabel(deadlineAt: string, logicalDate: string): string {
-  const deadlineDate = deadlineAt.slice(0, 10);
-  const time = deadlineAt.slice(11, 16);
+  const parts = SEOUL_DEADLINE_FORMATTER.formatToParts(new Date(deadlineAt));
+  const valueByType = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  const deadlineDate = `${valueByType.year}-${valueByType.month}-${valueByType.day}`;
+  const time = `${valueByType.hour}:${valueByType.minute}`;
 
   if (deadlineDate === logicalDate) {
     return `오늘 ${time} 마감`;

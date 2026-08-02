@@ -11,6 +11,14 @@ const homeHeaderSource = readFileSync(
   resolve(process.cwd(), 'src/features/home/components/home-header.tsx'),
   'utf8'
 );
+const deadlineWarningListSource = readFileSync(
+  resolve(process.cwd(), 'src/features/home/components/deadline-warning-list.tsx'),
+  'utf8'
+);
+const progressBarSource = readFileSync(
+  resolve(process.cwd(), 'src/features/home/components/progress-bar.tsx'),
+  'utf8'
+);
 
 test('빈 홈 상태는 음수 위치 보정 없이 스크롤 가능한 flex 구조를 사용한다', () => {
   const emptyStateStyles = homeScreenSource.slice(
@@ -105,4 +113,23 @@ test('NO_PLANS 조정은 공용 마스코트 stage와 다른 홈 상태 분기�
   assert.match(noPlansBranch, /<HomeMascot mascotKey=\{resolveHomeMascotKey\('NO_PLANS'\)\}/);
   assert.doesNotMatch(noPlansBranch, /(mascotStage|mascotBackdrop|mascotImage)/);
   assert.doesNotMatch(inProgressBranch, /styles\.elevatedEmptyStateBody/);
+});
+
+test('마감 임박 화면만 연보라 원형 배경을 숨긴다', () => {
+  const deadlineWarningBranch = homeScreenSource.slice(
+    homeScreenSource.indexOf("visibleState === 'DEADLINE_WARNING'"),
+    homeScreenSource.indexOf("visibleState === 'NO_ACTIVE_CYCLE'"),
+  );
+  assert.match(deadlineWarningBranch, /showBackdrop=\{false\}/);
+  assert.match(homeScreenSource, /showBackdrop=\{false\}/);
+});
+
+test('마감 시각 formatter는 배치 가능·부족 시간 값에 영향을 주지 않는다', () => {
+  assert.match(deadlineWarningListSource, /formatDeadlineLabel\(item\.deadlineAt, logicalDate\)/);
+  assert.match(deadlineWarningListSource, /\{item\.availableMinutes\}분/);
+  assert.match(deadlineWarningListSource, /\{item\.shortageMinutes\}분/);
+});
+
+test('홈 진행 바의 100% 구름 효과는 끄고 마스코트 하트 효과만 사용한다', () => {
+  assert.match(progressBarSource, /showCompletionEffect=\{false\}/);
 });
