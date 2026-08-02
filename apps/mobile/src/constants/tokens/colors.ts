@@ -17,8 +17,20 @@ export const colors = {
   checkInCompletedAccent: '#A855F7',
   checkInScrollbarTrack: '#D9D9DE',
   checkInScrollbarThumb: '#77777D',
-  // 마감 임박(DEADLINE_WARNING) 배지·카드에서 반복되는 주황 계열 경고색 (UI-008, UI-009)
-  warning: '#F59E0B',
+  // 마감 임박(DEADLINE_WARNING) 상단 "마감 임박" 배지 (UI-008, UI-009)
+  deadlineBadgeBackground: '#FFF9E5',
+  deadlineBadgeText: '#CCA33C',
+  // 마감 임박(DEADLINE_WARNING) 카드 (UI-008, UI-009)
+  deadlineCardBackground: '#FFF3C8',
+  deadlineCardBorder: '#F4D779',
+  deadlineCardTitle: '#25222A',
+  deadlineCardDeadline: '#C97813',
+  deadlineCardAvailable: '#25845D',
+  deadlineCardShortage: '#C97813',
+  deadlineCardIcon: '#FFA100',
+  deadlineCardStatLabel: '#817A88',
+  // 카드 아래(카드 밖) 배치 설명 문구, 헤더 부제목과 공용
+  deadlineDescriptionText: '#85818A',
 } as const;
 
 // Home과 Calendar의 동일한 PlanBlock 상태가 화면마다 달라지지 않도록 공유하는 시각 계약.

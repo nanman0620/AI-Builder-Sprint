@@ -182,6 +182,32 @@ export function formatLogicalDateBadge(logicalDate: string): string {
   return formatter.format(date);
 }
 
+// deadlineAt은 항상 "+09:00" 오프셋을 포함한 ISO 문자열이라(§8 마감 경고 예시) Date 파싱 없이
+// 앞 10자(YYYY-MM-DD)·11~16자(HH:mm)를 그대로 잘라 쓴다. logicalDate와 같은 "YYYY-MM-DD" 형식만 비교하므로
+// 기기 로컬 타임존 영향을 받지 않는다. 마감일이 오늘·내일이 아니면 "M월 D일"로 표시한다.
+export function formatDeadlineLabel(deadlineAt: string, logicalDate: string): string {
+  const deadlineDate = deadlineAt.slice(0, 10);
+  const time = deadlineAt.slice(11, 16);
+
+  if (deadlineDate === logicalDate) {
+    return `오늘 ${time} 마감`;
+  }
+
+  const [year, month, day] = logicalDate.split('-').map(Number);
+  const tomorrow = new Date(Date.UTC(year, month - 1, day + 1));
+  const tomorrowLabel = [
+    tomorrow.getUTCFullYear(),
+    String(tomorrow.getUTCMonth() + 1).padStart(2, '0'),
+    String(tomorrow.getUTCDate()).padStart(2, '0'),
+  ].join('-');
+  if (deadlineDate === tomorrowLabel) {
+    return `내일 ${time} 마감`;
+  }
+
+  const [, deadlineMonth, deadlineDay] = deadlineDate.split('-').map(Number);
+  return `${deadlineMonth}월 ${deadlineDay}일 ${time} 마감`;
+}
+
 const PERIOD_LABELS: Record<PlanPeriod, string> = {
   MORNING: '오전',
   AFTERNOON: '오후',
