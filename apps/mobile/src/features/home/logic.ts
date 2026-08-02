@@ -92,8 +92,65 @@ function resolveScoreFeedback(score: number): string {
   return '괜찮아요, 다시 이어가면 돼요';
 }
 
-export function resolveProgressFeedback(percentage: number): string {
-  return resolveScoreFeedback(percentage);
+export const PROGRESS_FEEDBACK_MESSAGES: Record<ScoreBand, readonly string[]> = {
+  SCORE_00: [
+    '지금부터 하나씩 시작해 봐요!',
+    '첫 번째 계획부터 힘차게 시작해 볼까요?',
+    '작은 시작이 오늘의 좋은 흐름을 만들어요',
+    '지금 한 걸음 내디디면 충분해요!',
+    '오늘의 첫 완료를 함께 만들어 봐요!',
+    '할 수 있어요, 바로 지금 시작해 봐요!',
+  ],
+  SCORE_30: [
+    '좋아요, 시작했어요! 다음 계획도 이어가 봐요',
+    '첫걸음을 해냈어요, 이 기세로 계속 가요!',
+    '멋진 출발이에요, 하나 더 완료해 볼까요?',
+    '좋은 흐름을 만들었어요, 계속 이어가 봐요!',
+    '이미 해내고 있어요, 다음 계획도 힘차게!',
+    '시작이 좋아요! 오늘의 목표를 향해 가요',
+  ],
+  SCORE_60: [
+    '잘하고 있어요, 이 흐름 그대로 끝까지 가요!',
+    '절반을 훌쩍 넘었어요, 힘차게 이어가 봐요!',
+    '거의 다 왔어요, 조금만 더 힘내요!',
+    '오늘의 목표가 가까워졌어요, 계속 전진해요!',
+    '멋지게 해내고 있어요, 남은 계획도 이어가요!',
+    '지금의 기세라면 충분히 모두 해낼 수 있어요!',
+  ],
+  SCORE_100: [
+    '해냈어요! 오늘의 모든 계획을 완료했어요!',
+    '완벽해요! 오늘의 목표를 전부 달성했어요!',
+    '정말 멋져요, 끝까지 힘차게 해냈어요!',
+    '오늘도 최고예요! 이 성취를 마음껏 즐겨요!',
+    '모든 계획 완료! 오늘의 도전을 멋지게 끝냈어요!',
+    '대단해요! 오늘 만든 기세를 계속 이어가요!',
+  ],
+};
+
+export function stableHash(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+export function resolveProgressFeedback(input: {
+  percentage: number;
+  logicalDate: string;
+  currentPeriod: PlanPeriod;
+  completedPlanCount: number;
+  totalPlanCount: number;
+}): string {
+  const messages = PROGRESS_FEEDBACK_MESSAGES[resolveScoreBand(input.percentage)];
+  const seed = [
+    input.logicalDate,
+    input.currentPeriod,
+    input.completedPlanCount,
+    input.totalPlanCount,
+  ].join('|');
+  return messages[stableHash(seed) % messages.length];
 }
 
 export function resolveCheckInFeedback(score: number, cycleEnded: boolean): string {
@@ -125,12 +182,22 @@ export function formatLogicalDateBadge(logicalDate: string): string {
   return formatter.format(date);
 }
 
-// deadlineAt은 항상 "+09:00" 오프셋을 포함한 ISO 문자열이라(§8 마감 경고 예시) Date 파싱 없이
-// 앞 10자(YYYY-MM-DD)·11~16자(HH:mm)를 그대로 잘라 쓴다. logicalDate와 같은 "YYYY-MM-DD" 형식만 비교하므로
-// 기기 로컬 타임존 영향을 받지 않는다. 마감일이 오늘·내일이 아니면 "M월 D일"로 표시한다.
+const SEOUL_DEADLINE_FORMATTER = new Intl.DateTimeFormat('ko-KR', {
+  timeZone: 'Asia/Seoul',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+// deadlineAt의 오프셋 표기(Z/+09:00)와 실행 기기의 timezone에 관계없이 서울 기준 날짜·시각으로 표시한다.
 export function formatDeadlineLabel(deadlineAt: string, logicalDate: string): string {
-  const deadlineDate = deadlineAt.slice(0, 10);
-  const time = deadlineAt.slice(11, 16);
+  const parts = SEOUL_DEADLINE_FORMATTER.formatToParts(new Date(deadlineAt));
+  const valueByType = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  const deadlineDate = `${valueByType.year}-${valueByType.month}-${valueByType.day}`;
+  const time = `${valueByType.hour}:${valueByType.minute}`;
 
   if (deadlineDate === logicalDate) {
     return `오늘 ${time} 마감`;

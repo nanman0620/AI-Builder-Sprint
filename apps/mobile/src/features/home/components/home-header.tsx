@@ -13,6 +13,7 @@ type HomeHeaderProps = {
   badgeLabel?: string;
   nickname?: string | null;
   title: string;
+  feedback?: string;
   description?: string;
   showShopIcon?: boolean;
   titleStyle?: StyleProp<TextStyle>;
@@ -40,6 +41,7 @@ export function HomeHeader({
   badgeLabel,
   nickname,
   title,
+  feedback,
   description,
   showShopIcon = true,
   titleStyle,
@@ -74,6 +76,22 @@ export function HomeHeader({
             {greeting ? `${greeting}\n` : ''}
             {title}
           </Text>
+          {feedback ? (
+            <Text
+              adjustsFontSizeToFit
+              minimumFontScale={0.65}
+              numberOfLines={1}
+              style={[
+                styles.feedback,
+                feedback.length > 28
+                  ? styles.feedbackTight
+                  : feedback.length > 22
+                    ? styles.feedbackCompact
+                    : null,
+              ]}>
+              {feedback}
+            </Text>
+          ) : null}
           {description ? (
             <Text style={[styles.description, descriptionStyle]} numberOfLines={descriptionNumberOfLines}>
               {description}
@@ -119,9 +137,11 @@ const styles = StyleSheet.create({
   headerRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
+    position: 'relative',
   },
   headerContent: {
     flex: 1,
+    minWidth: 0,
   },
   badgeRow: {
     flexDirection: 'row',
@@ -159,15 +179,27 @@ const styles = StyleSheet.create({
     fontSize: 17,
     marginLeft: 8,
   },
+  feedback: {
+    ...typography.title,
+    color: colors.text,
+    fontSize: 17,
+    marginLeft: 8,
+  },
+  feedbackCompact: {
+    fontSize: 14,
+  },
+  feedbackTight: {
+    fontSize: 12,
+  },
   description: {
     ...typography.body,
     color: colors.textSecondary,
     marginTop: spacing.xs,
   },
   shopButton: {
-    marginLeft: spacing.md - 30 ,
-    marginRight: -30, 
-    marginTop: 6,
+    position: 'absolute',
+    right: -30,
+    top: 6,
   },
   shopIcon: {
     height: 1,
