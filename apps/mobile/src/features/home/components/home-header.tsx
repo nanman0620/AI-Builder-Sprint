@@ -7,12 +7,16 @@ import { formatLogicalDateBadge } from '../logic';
 import { ShopComingSoonModal } from './shop-coming-soon-modal';
 
 const SHOP_ICON_SOURCE = require('@/assets/brand/shop-entry-icon.png');
+const SHOP_COLUMN_WIDTH = 76;
+const SHOP_ICON_WIDTH = 68;
+const SHOP_ICON_HEIGHT = 98;
 
 type HomeHeaderProps = {
   logicalDate: string;
   badgeLabel?: string;
   nickname?: string | null;
   title: string;
+  feedback?: string;
   description?: string;
   showShopIcon?: boolean;
   titleStyle?: StyleProp<TextStyle>;
@@ -40,6 +44,7 @@ export function HomeHeader({
   badgeLabel,
   nickname,
   title,
+  feedback,
   description,
   showShopIcon = true,
   titleStyle,
@@ -48,20 +53,12 @@ export function HomeHeader({
 }: HomeHeaderProps) {
   const trimmedNickname = nickname?.trim();
   const greeting = nickname !== undefined ? (trimmedNickname ? `${trimmedNickname}님,` : '안녕하세요,') : null;
-  const [headerContentHeight, setHeaderContentHeight] = useState(0);
   const [isShopModalVisible, setIsShopModalVisible] = useState(false);
 
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
-        <View
-          style={styles.headerContent}
-          onLayout={({ nativeEvent }) => {
-            const nextHeight = nativeEvent.layout.height;
-            if (nextHeight !== headerContentHeight) {
-              setHeaderContentHeight(nextHeight);
-            }
-          }}>
+        <View style={styles.headerContent}>
           <View style={styles.badgeRow}>
             <HomeDateBadge logicalDate={logicalDate} />
             {badgeLabel ? (
@@ -74,6 +71,22 @@ export function HomeHeader({
             {greeting ? `${greeting}\n` : ''}
             {title}
           </Text>
+          {feedback ? (
+            <Text
+              adjustsFontSizeToFit
+              minimumFontScale={0.65}
+              numberOfLines={1}
+              style={[
+                styles.feedback,
+                feedback.length > 28
+                  ? styles.feedbackTight
+                  : feedback.length > 22
+                    ? styles.feedbackCompact
+                    : null,
+              ]}>
+              {feedback}
+            </Text>
+          ) : null}
           {description ? (
             <Text style={[styles.description, descriptionStyle]} numberOfLines={descriptionNumberOfLines}>
               {description}
@@ -91,12 +104,7 @@ export function HomeHeader({
               accessibilityIgnoresInvertColors
               source={SHOP_ICON_SOURCE}
               resizeMode="contain"
-              style={[
-                styles.shopIcon,
-                headerContentHeight > 0
-                  ? { height: headerContentHeight *0.9, opacity: 1 }
-                  : null,
-              ]}
+              style={styles.shopIcon}
             />
           </Pressable>
         ) : null}
@@ -119,9 +127,12 @@ const styles = StyleSheet.create({
   headerRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
+    position: 'relative',
   },
   headerContent: {
     flex: 1,
+    minWidth: 0,
+    paddingRight: SHOP_COLUMN_WIDTH,
   },
   badgeRow: {
     flexDirection: 'row',
@@ -159,19 +170,30 @@ const styles = StyleSheet.create({
     fontSize: 17,
     marginLeft: 8,
   },
+  feedback: {
+    ...typography.title,
+    color: colors.text,
+    fontSize: 17,
+    marginLeft: 8,
+  },
+  feedbackCompact: {
+    fontSize: 14,
+  },
+  feedbackTight: {
+    fontSize: 12,
+  },
   description: {
     ...typography.body,
     color: colors.textSecondary,
     marginTop: spacing.xs,
   },
   shopButton: {
-    marginLeft: spacing.md - 30 ,
-    marginRight: -30, 
-    marginTop: 6,
+    position: 'absolute',
+    right: 0,
+    top: 6,
   },
   shopIcon: {
-    height: 1,
-    aspectRatio: 159 / 228,
-    opacity: 0,
+    width: SHOP_ICON_WIDTH,
+    height: SHOP_ICON_HEIGHT,
   },
 });

@@ -4,6 +4,7 @@ Session을 쓰고, FastAPI의 동기 endpoint(threadpool에서 실행)와 짝을
 """
 
 import asyncio
+import http.client
 import json
 import logging
 import re
@@ -601,6 +602,40 @@ def _validate_amount(amount_text_raw: object, amount_source_raw: object) -> tupl
     if amount_text is None:
         raise SolarUnavailableError("amountSource가 USER/AI_ESTIMATED인데 amountText가 없다.")
     return amount_text, amount_source_raw, False
+
+
+_INTEGER_AMOUNT_PATTERN = re.compile(
+    r"(?<![0-9])(?P<count>[1-9][0-9]*)\s*(?P<unit>문제|개|페이지|단원|장|강|세트)"
+)
+
+
+def _recover_unambiguous_integer_amount(raw_line_text: str, canonical_payload: dict) -> dict:
+    """Recover one explicit integer workload when SOLAR left amount missing."""
+    if canonical_payload.get("amountText") is not None:
+        return canonical_payload
+    matches = list(_INTEGER_AMOUNT_PATTERN.finditer(raw_line_text))
+    if len(matches) != 1:
+        return canonical_payload
+
+    match = matches[0]
+    amount_text = f"{match.group('count')}{match.group('unit')}"
+    recovered = dict(canonical_payload)
+    recovered["amountText"] = amount_text
+    recovered["amountSource"] = "USER"
+
+    title = recovered.get("title")
+    if isinstance(title, str):
+        compact_title = re.sub(r"\s+", "", title)
+        if amount_text in compact_title:
+            amount_pattern = re.compile(
+                rf"(?<![0-9]){re.escape(match.group('count'))}\s*{re.escape(match.group('unit'))}"
+            )
+            cleaned_title = amount_pattern.sub(" ", title, count=1)
+            cleaned_title = re.sub(r"\s+", " ", cleaned_title).strip(" ,.!?")
+            cleaned_title = re.sub(r"(?:을|를)$", "", cleaned_title).strip()
+            if cleaned_title:
+                recovered["title"] = cleaned_title
+    return recovered
 
 
 # ---------------------------------------------------------------------------
@@ -1203,6 +1238,9 @@ def _parse_item(
             missing_fields, canonical_payload = _validate_and_normalize_task_create(
                 normalized_payload_raw, raw.get("deadlineState")
             )
+            canonical_payload = _recover_unambiguous_integer_amount(raw_line_text, canonical_payload)
+            if canonical_payload.get("amountText") is not None:
+                missing_fields = [field for field in missing_fields if field != "amount"]
         else:
             missing_fields, canonical_payload = _validate_and_normalize_fixed_schedule_create(
                 normalized_payload_raw
@@ -1849,6 +1887,9 @@ def _build_prompt_messages(
         "deadlineAt=null로 두세요(값을 채우면 안 됩니다). updateFields에 있는 필드는 새 값을"
         " 확실히 알 때만 채우고, 모르면 해당 필드만 null로 두세요(카드 전체를 포기하지 마세요).\n\n"
         "[TASK title과 amountText의 역할 구분 — CREATE와 UPDATE 모두 동일하게 적용]\n"
+        "- 정수 수행량 단위(문제, 개, 페이지, 단원, 장, 강, 세트)는 작업명과 분리하세요. "
+        "예: 'C++ 복습 1단원'은 title=\"C++ 복습\", amountText=\"1단원\"입니다. "
+        "'자료구조 문제 5개'도 문맥상 작업명과 amountText=\"5개\"를 분리하세요.\n"
         "- title은 사용자가 해야 할 일을 식별하는 간결한 작업명입니다. amountText로 담을 전체"
         " 분량, deadlineAt으로 담을 마감, estimatedMinutes/remainingMinutes로 담을 예상·남은"
         " 시간을 title에 중복해서 넣지 마세요. 정규식으로 숫자를 기계적으로 지우라는 뜻이"
@@ -1986,7 +2027,7 @@ def call_solar(payload: dict) -> str:
             response_body = response.read()
     except urllib.error.HTTPError as exc:
         raise SolarUnavailableError(f"SOLAR가 오류 상태 코드를 반환했다: {exc.code}") from exc
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
         raise SolarUnavailableError("SOLAR 호출에 실패했다(네트워크·타임아웃).") from exc
 
     try:

@@ -12,6 +12,7 @@ export const TAB_BAR_DIVIDER_TOP =
 export const PLAN_COMPOSER_DIVIDER_GAP = 12;
 // 계획관리 화면 콘텐츠는 tab bar 상단에서 끝나므로 divider의 음수 top만큼 올린 뒤 12dp를 더 띄운다.
 export const PLAN_COMPOSER_BOTTOM_OFFSET = -TAB_BAR_DIVIDER_TOP + PLAN_COMPOSER_DIVIDER_GAP;
+export const PLAN_COMPOSER_RESTING_BOTTOM_MARGIN = PLAN_COMPOSER_BOTTOM_OFFSET - 4;
 
 export function getTabBarStyle(bottomInset: number, hidden = false): ViewStyle {
   return {

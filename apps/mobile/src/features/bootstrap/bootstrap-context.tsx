@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 
-import { signOut } from '@/src/features/auth/services/auth-service';
+import { refreshAccessToken, signOut } from '@/src/features/auth/services/auth-service';
 import { ApiClientError } from '@/src/services/api/client';
 import { getSupabaseClient } from '@/src/services/supabase/client';
 
@@ -61,6 +61,7 @@ export function BootstrapProvider({ children }: { children: ReactNode }) {
 
     const run = async (): Promise<BootstrapSyncResult> => {
       let result: BootstrapSyncResult;
+      let attemptedAccessToken: string | null = null;
 
       try {
         const {
@@ -71,8 +72,24 @@ export function BootstrapProvider({ children }: { children: ReactNode }) {
         if (gate.type === 'no-session') {
           result = { type: 'no-session' };
         } else {
-          const bootstrap = await getBootstrap(gate.accessToken);
-          result = { type: 'success', data: bootstrap };
+          attemptedAccessToken = gate.accessToken;
+          try {
+            const bootstrap = await getBootstrap(gate.accessToken);
+            result = { type: 'success', data: bootstrap };
+          } catch (err) {
+            if (!(err instanceof ApiClientError) || err.code !== 'AUTH_REQUIRED') {
+              throw err;
+            }
+
+            const refreshedAccessToken = await refreshAccessToken();
+            if (!refreshedAccessToken) {
+              result = { type: 'auth-required' };
+            } else {
+              attemptedAccessToken = refreshedAccessToken;
+              const bootstrap = await getBootstrap(refreshedAccessToken);
+              result = { type: 'success', data: bootstrap };
+            }
+          }
         }
       } catch (err) {
         if (err instanceof ApiClientError && err.code === 'AUTH_REQUIRED') {
@@ -82,9 +99,16 @@ export function BootstrapProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      if (result.type === 'auth-required') {
+      if (result.type === 'auth-required' && requestId === latestRequestIdRef.current) {
         try {
-          await signOut();
+          const {
+            data: { session: currentSession },
+          } = await getSupabaseClient().auth.getSession();
+
+          // 로그인 직후 이전 bootstrap 요청의 401이 늦게 도착해도 새 세션을 지우지 않는다.
+          if (currentSession?.access_token === attemptedAccessToken) {
+            await signOut();
+          }
         } catch {
           // 로그아웃 실패는 무시하고 로컬 상태만 정리한다. session이나 오류 내용을 로그로 남기지 않는다.
         }

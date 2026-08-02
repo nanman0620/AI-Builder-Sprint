@@ -494,6 +494,44 @@ def test_create_solar_request_new_cycle_create_success_is_change_confirmation(
     assert uuid.UUID(snapshot["snapshotId"])
 
 
+def test_create_four_complete_tasks_persists_deterministic_items_and_snapshots(
+    monkeypatch, patch_plan_management_state
+):
+    titles = ["C++ 복습", "선형대수 복습", "자료구조 복습", "운영체제 복습"]
+    items = [
+        _create_item(
+            raw_line_text=f"오늘 오후 5시 59분까지 {title} 1단원을 하고 총 30분 걸려.",
+            normalized_payload={
+                "title": title,
+                "deadlineAt": "2026-07-30T17:59:00+09:00",
+                "estimatedMinutes": 30,
+                "estimatedMinutesSource": "USER",
+                "remainingMinutes": None,
+                "amountText": "1단원",
+                "amountSource": "USER",
+            },
+        )
+        for title in titles
+    ]
+    analysis = SolarAnalysisResult(analysis_message="네 개 작업을 확인했어요.", items=items, unresolved_line=None)
+    _patch_analyze_message(monkeypatch, result=analysis)
+    fake_db = _CreateFakeSession(current_request_sequence=[None, None], active_cycle_sequence=[None, None])
+
+    result = _call_create(fake_db, client_event_id="evt-four-tasks", message="\n".join(item.raw_line_text for item in items))
+
+    assert result.created is True
+    request_obj = fake_db.added[0]
+    stored_items = fake_db.added[1:5]
+    assert request_obj.status == SolarRequestStatus.CHANGE_CONFIRMATION
+    assert [item.item_order for item in stored_items] == [1, 2, 3, 4]
+    assert [item.normalized_payload["title"] for item in stored_items] == titles
+    assert all(item.normalized_payload["amountText"] == "1단원" for item in stored_items)
+    assert all(item.normalized_payload["estimatedMinutes"] == 30 for item in stored_items)
+    snapshots = fake_db.added[-1].message_metadata["requestItemSnapshots"]
+    assert len(snapshots) == 4
+    assert len({snapshot["snapshotId"] for snapshot in snapshots}) == 4
+
+
 def test_create_solar_request_collecting_adds_question_message(monkeypatch, patch_plan_management_state):
     item = _create_item(
         normalized_payload={

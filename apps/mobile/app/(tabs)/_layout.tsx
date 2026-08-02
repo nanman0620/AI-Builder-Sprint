@@ -2,6 +2,7 @@ import { Tabs } from 'expo-router';
 import React from 'react';
 import {
   Image,
+  Platform,
   StyleSheet,
   View,
   type ImageSourcePropType,
@@ -59,7 +60,7 @@ function isExitDestination(routeName: string): routeName is Exclude<ExitDestinat
 
 function GuardedTabs() {
   const { isGuardActive, requestExit } = usePlanExitGuard();
-  const { bottom: bottomInset } = useSafeAreaInsets();
+  const { bottom: bottomInset, top: topInset } = useSafeAreaInsets();
 
   return (
     <Tabs
@@ -80,8 +81,20 @@ function GuardedTabs() {
         tabBarBackground: TabBarBackground,
         tabBarButton: HapticTab,
         tabBarLabel: () => null,
+        tabBarHideOnKeyboard: true,
         tabBarShowLabel: false,
         tabBarStyle: getTabBarStyle(bottomInset),
+        sceneStyle: {
+          backgroundColor: colors.background,
+          paddingTop: Platform.OS === 'web' ? 0 : topInset,
+          ...(Platform.OS === 'web'
+            ? {
+                width: '100%',
+                maxWidth: 480,
+                alignSelf: 'center',
+              }
+            : null),
+        },
       }}>
       <Tabs.Screen
         name="calendar"

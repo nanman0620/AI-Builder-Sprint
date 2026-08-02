@@ -2,9 +2,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 
+import { SafeAreaScreen } from '@/src/components/common/safe-area-screen';
 import { colors, fonts } from '@/src/constants/tokens';
 import { useAppSync } from '@/src/features/app-sync/app-sync-context';
 import { performAccountWithdrawal } from '@/src/features/auth/account-withdrawal-flow';
@@ -84,7 +84,7 @@ export default function AccountWithdrawalScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top']}>
+    <SafeAreaScreen edges={['top', 'bottom']} style={styles.safeArea}>
       <View style={styles.header}>
         <Pressable onPress={handleBack} style={styles.backButton} hitSlop={8} disabled={isSubmitting}>
           <ChevronLeftIcon size={14} color={TEXT} />
@@ -109,7 +109,7 @@ export default function AccountWithdrawalScreen() {
           </Pressable>
         </View>
       </View>
-    </SafeAreaView>
+    </SafeAreaScreen>
   );
 }
 

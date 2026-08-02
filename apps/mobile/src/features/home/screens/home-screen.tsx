@@ -92,7 +92,12 @@ export function HomeScreen() {
           descriptionStyle={styles.deadlineWarningDescription}
           descriptionNumberOfLines={1}
         />
-        <HomeMascot mascotKey={resolveHomeMascotKey('DEADLINE_WARNING')} size={235} style={styles.centerMascot} />
+        <HomeMascot
+          mascotKey={resolveHomeMascotKey('DEADLINE_WARNING')}
+          size={235}
+          showBackdrop={false}
+          style={styles.centerMascot}
+        />
         <DeadlineWarningList
           items={data.blockingNotice.items}
           logicalDate={data.logicalDate}
@@ -116,7 +121,7 @@ export function HomeScreen() {
           style={styles.emptyStateScroll}
           contentContainerStyle={styles.emptyStateContent}
           bounces={false}>
-          <View style={styles.emptyStateBody}>
+          <View style={styles.elevatedEmptyStateBody}>
             <HomeMascot
               mascotKey={resolveHomeMascotKey('NO_ACTIVE_CYCLE')}
               size={290}
@@ -147,10 +152,13 @@ export function HomeScreen() {
           style={styles.emptyStateScroll}
           contentContainerStyle={styles.emptyStateContent}
           bounces={false}>
-          <View style={styles.emptyStateBody}>
+          <View style={styles.elevatedEmptyStateBody}>
             <HomeMascot mascotKey={resolveHomeMascotKey('NO_PLANS')} style={styles.centerMascot} />
             <Text style={styles.bodyHeadline}>지금 시간대에는 예정된 계획이 없어요.</Text>
             <Text style={styles.bodyDescription}>잠시 쉬어가도 괜찮아요.</Text>
+            <Pressable style={styles.outlineButton} onPress={() => router.push('/(tabs)/plan-management')}>
+              <Text style={styles.outlineButtonText}>계획관리에서 등록하기</Text>
+            </Pressable>
           </View>
         </ScrollView>
       </View>
@@ -161,18 +169,21 @@ export function HomeScreen() {
   const planBlocks = sortPlanBlocksByDisplayOrder(data.planBlocks);
   const periodLabel = formatPeriodLabel(data.period);
   const progressFeedback = data.progress
-    ? resolveProgressFeedback(data.progress.percentage)
-    : '나만의 속도로 잘 가고 있어요!';
+    ? resolveProgressFeedback({
+        percentage: data.progress.percentage,
+        logicalDate: data.logicalDate,
+        currentPeriod: data.period,
+        completedPlanCount: data.progress.checkedCount,
+        totalPlanCount: data.progress.totalCount,
+      })
+    : '지금부터 하나씩 시작해 봐요!';
 
   return (
     <View style={styles.screen}>
       <HomeHeader
         logicalDate={data.logicalDate}
-        title={
-          nickname
-            ? `${nickname}님의 ${periodLabel} 할 일\n${progressFeedback}`
-            : `안녕하세요,\n${periodLabel} 할 일도 ${progressFeedback}`
-        }
+        title={nickname ? `${nickname}님의 ${periodLabel} 할 일` : '안녕하세요,'}
+        feedback={nickname ? progressFeedback : `${periodLabel} 할 일도 ${progressFeedback}`}
       />
       {data.progress ? <ProgressBar percentage={data.progress.percentage} /> : null}
       {data.progress ? (
@@ -284,10 +295,11 @@ const styles = StyleSheet.create({
     paddingTop: spacing.xl * 2,
     paddingBottom: spacing.xl,
   },
-  emptyStateBody: {
+  elevatedEmptyStateBody: {
     flexGrow: 1,
     alignItems: 'center',
-    justifyContent: 'center',
+    paddingTop: 0,
+    gap: spacing.sm,
   },
   centerMascot: {
     alignSelf: 'center',

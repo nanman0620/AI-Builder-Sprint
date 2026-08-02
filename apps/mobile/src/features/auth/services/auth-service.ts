@@ -27,6 +27,14 @@ export async function signOut(options?: SignOutOptions): Promise<void> {
   await getSupabaseClient().auth.signOut(options);
 }
 
+export async function refreshAccessToken(): Promise<string | null> {
+  const { data, error } = await getSupabaseClient().auth.refreshSession();
+  if (error || !data.session?.access_token) {
+    return null;
+  }
+  return data.session.access_token;
+}
+
 export async function signInWithEmail(email: string, password: string): Promise<SignInResult> {
   const { data, error } = await getSupabaseClient().auth.signInWithPassword({ email, password });
   if (error) {

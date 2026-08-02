@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { colors, spacing, typography } from '@/src/constants/tokens';
 
 import { MessageInput } from './message-input';
+import { PlanKeyboardLayout } from './plan-keyboard-layout';
 
 const mascotReading = require('@/assets/brand/mascot-reading.png');
 
@@ -31,7 +32,7 @@ export function EntryScreen({ title, examples, isSubmitting, onSubmit }: EntrySc
   };
 
   return (
-    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <PlanKeyboardLayout>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Image source={mascotReading} style={styles.mascot} resizeMode="contain" />
         <Text style={styles.title}>{title}</Text>
@@ -50,15 +51,11 @@ export function EntryScreen({ title, examples, isSubmitting, onSubmit }: EntrySc
         <Text style={styles.hint}>대화 기록은 이 탭을 벗어나면 사라져요</Text>
       </ScrollView>
       <MessageInput value={value} onChangeText={setValue} onSubmit={handleSubmit} disabled={isSubmitting} />
-    </KeyboardAvoidingView>
+    </PlanKeyboardLayout>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
   content: {
     padding: spacing.lg,
   },

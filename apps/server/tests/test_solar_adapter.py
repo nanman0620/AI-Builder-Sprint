@@ -1,4 +1,5 @@
 import json
+import http.client
 import logging
 import urllib.error
 from datetime import datetime, timezone
@@ -901,6 +902,66 @@ def test_call_solar_url_error_maps_to_unavailable(monkeypatch):
     with pytest.raises(SolarUnavailableError):
         call_solar({"messages": []})
 
+
+def test_call_solar_incomplete_read_maps_to_unavailable(monkeypatch):
+    class _IncompleteResponse(_FakeHTTPResponse):
+        def read(self):
+            raise http.client.IncompleteRead(b'{"choices":', 100)
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen", lambda request, timeout=None: _IncompleteResponse(b"")
+    )
+
+    with pytest.raises(SolarUnavailableError):
+        call_solar({"messages": []})
+
+
+@pytest.mark.parametrize(
+    ("raw_line_text", "solar_title", "expected_title", "expected_amount"),
+    [
+        ("오늘 오후 5시 59분까지 C++ 복습 1단원을 하고 총 30분 걸려.", "C++ 복습 1단원", "C++ 복습", "1단원"),
+        ("오늘 오후 5시 59분까지 C++ 복습을 1단원 하고 총 30분 걸려.", "C++ 복습", "C++ 복습", "1단원"),
+        ("오늘 오후 5시 59분까지 C++ 1단원 복습하고 총 30분 걸려.", "C++ 1단원 복습", "C++ 복습", "1단원"),
+        ("오늘 오후 5시 59분까지 C++ 복습 1문제를 하고 총 30분 걸려.", "C++ 복습 1문제", "C++ 복습", "1문제"),
+        ("오늘 오후 5시 59분까지 C++ 복습 1페이지를 하고 총 30분 걸려.", "C++ 복습 1페이지", "C++ 복습", "1페이지"),
+        ("오늘 오후 5시 59분까지 C++ 복습 1장을 하고 총 30분 걸려.", "C++ 복습 1장", "C++ 복습", "1장"),
+        ("오늘 오후 5시 59분까지 C++ 복습 1강을 듣고 총 30분 걸려.", "C++ 복습 1강", "C++ 복습", "1강"),
+        ("오늘 오후 5시 59분까지 C++ 복습 1세트를 하고 총 30분 걸려.", "C++ 복습 1세트", "C++ 복습", "1세트"),
+    ],
+)
+def test_task_create_recovers_single_integer_amount_from_raw_line(
+    raw_line_text, solar_title, expected_title, expected_amount
+):
+    item = _task_create_item(
+        title=solar_title,
+        estimatedMinutes=30,
+        estimatedMinutesSource="USER",
+        amountText=None,
+        amountSource=None,
+    )
+    item["rawLineText"] = raw_line_text
+    item["pendingQuestion"] = {"field": "amount", "message": "작업의 총 분량이 어떻게 되나요?"}
+
+    parsed = _parse(_envelope(items=[item])).items[0]
+
+    assert parsed.normalized_payload["title"] == expected_title
+    assert parsed.normalized_payload["amountText"] == expected_amount
+    assert parsed.normalized_payload["amountSource"] == "USER"
+    assert parsed.missing_fields == []
+    assert parsed.pending_question is None
+
+
+@pytest.mark.parametrize("title", ["운영체제 과제 2번", "2차 과제", "문제 3 풀이", "챕터 1 발표", "3분 스피치"])
+def test_amount_fallback_preserves_identifier_numbers_in_title(title):
+    item = _task_create_item(title=title, amountText=None, amountSource=None)
+    item["rawLineText"] = title
+    item["pendingQuestion"] = {"field": "amount", "message": "작업의 총 분량이 어떻게 되나요?"}
+
+    parsed = _parse(_envelope(items=[item])).items[0]
+
+    assert parsed.normalized_payload["title"] == title
+    assert parsed.normalized_payload["amountText"] is None
+    assert parsed.missing_fields == ["amount"]
 
 def test_call_solar_non_json_body_rejected(monkeypatch):
     monkeypatch.setattr(
