@@ -17,12 +17,27 @@ const COMPOSER_KEYBOARD_GAP = 8;
 export function PlanKeyboardLayout({ children }: { children: ReactNode }) {
   const { height: windowHeight } = useWindowDimensions();
   const [keyboardInset, setKeyboardInset] = useState(0);
+  const [isAndroidKeyboardVisible, setIsAndroidKeyboardVisible] = useState(false);
   const keyboardPadding = Math.max(
     0,
     keyboardInset + COMPOSER_KEYBOARD_GAP - PLAN_COMPOSER_RESTING_BOTTOM_MARGIN,
   );
 
   useEffect(() => {
+    if (Platform.OS === 'android') {
+      const showSubscription = Keyboard.addListener('keyboardDidShow', () => {
+        setIsAndroidKeyboardVisible(true);
+      });
+      const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
+        setIsAndroidKeyboardVisible(false);
+      });
+
+      return () => {
+        showSubscription.remove();
+        hideSubscription.remove();
+      };
+    }
+
     if (Platform.OS !== 'ios') {
       return;
     }
@@ -48,7 +63,9 @@ export function PlanKeyboardLayout({ children }: { children: ReactNode }) {
 
   if (Platform.OS === 'android') {
     return (
-      <KeyboardAvoidingView behavior="height" style={styles.layout}>
+      <KeyboardAvoidingView
+        behavior="height"
+        style={[styles.layout, isAndroidKeyboardVisible ? styles.androidKeyboardGap : null]}>
         {children}
       </KeyboardAvoidingView>
     );
@@ -69,5 +86,8 @@ const styles = StyleSheet.create({
   layout: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  androidKeyboardGap: {
+    paddingBottom: COMPOSER_KEYBOARD_GAP,
   },
 });

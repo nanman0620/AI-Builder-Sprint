@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Dimensions, Easing, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { fonts } from '@/src/constants/tokens';
+import { getLogoutSheetPaddingBottom } from '@/src/features/settings/components/logout-confirm-modal-layout';
 
 type LogoutConfirmModalProps = {
   visible: boolean;
@@ -23,6 +25,7 @@ const OFF_SCREEN_Y = Dimensions.get('window').height;
 // UI-030 로그아웃 오버레이: 딤 배경 fade + 바텀 시트 slide-up. Modal 자체 animationType은 쓰지 않고
 // visible이 false로 바뀐 뒤에도 닫힘 애니메이션이 끝날 때까지 isMounted로 렌더링을 유지한다.
 export function LogoutConfirmModal({ visible, loading = false, onCancel, onConfirm }: LogoutConfirmModalProps) {
+  const { bottom: bottomInset } = useSafeAreaInsets();
   const [isMounted, setIsMounted] = useState(visible);
   const overlayOpacity = useRef(new Animated.Value(0)).current;
   const sheetTranslateY = useRef(new Animated.Value(OFF_SCREEN_Y)).current;
@@ -84,7 +87,7 @@ export function LogoutConfirmModal({ visible, loading = false, onCancel, onConfi
           />
         </Animated.View>
         <Animated.View style={[styles.sheetContainer, { transform: [{ translateY: sheetTranslateY }] }]}>
-          <View style={styles.sheet}>
+          <View style={[styles.sheet, { paddingBottom: getLogoutSheetPaddingBottom(bottomInset) }]}>
             <View style={styles.handle} />
             <Text style={styles.title}>로그아웃할까요?</Text>
             <Text style={styles.description}>다음에는 다시 로그인해야 해요.</Text>
@@ -122,7 +125,6 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingHorizontal: 24,
-    paddingBottom: 40,
   },
   handle: {
     width: 36,
