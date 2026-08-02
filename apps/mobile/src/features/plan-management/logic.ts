@@ -114,36 +114,124 @@ function getMessageSnapshots(message: SolarRequest['messages'][number]): Request
     .sort((a, b) => a.itemOrder - b.itemOrder || a.snapshotId.localeCompare(b.snapshotId));
 }
 
+function getQuestionTarget(message: SolarRequest['messages'][number]) {
+  const itemId = message.metadata.itemId;
+  const field = message.metadata.field;
+  if (
+    message.role !== 'ASSISTANT' ||
+    message.kind !== 'QUESTION' ||
+    message.metadata.promptType === CHANGE_CONFIRMATION_PROMPT_TYPE ||
+    message.metadata.followUpType === 'CHANGE_DETAILS' ||
+    message.metadata.followUpType === 'UNSUPPORTED_TASK_RECURRENCE' ||
+    message.metadata.unresolved === true ||
+    typeof itemId !== 'string' ||
+    !itemId.trim() ||
+    typeof field !== 'string' ||
+    !field.trim()
+  ) {
+    return null;
+  }
+  return { itemId: itemId.trim(), field: field.trim() };
+}
+
+function findLegacyActiveQuestionId(messages: SolarRequest['messages']): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!getQuestionTarget(message)) continue;
+    const hasLaterUserAnswer = messages
+      .slice(index + 1)
+      .some((laterMessage) => laterMessage.role === 'USER');
+    if (!hasLaterUserAnswer) return message.id;
+  }
+  return null;
+}
+
 export function buildConversationTimeline(request: SolarRequest): ConversationTimelineEntry[] {
   const messages = getMessagesForCurrentConfirmationFlow(request);
   const entries: ConversationTimelineEntry[] = [];
   const seenSnapshotIds = new Set<string>();
-
-  for (const message of messages) {
-    entries.push({ type: 'MESSAGE', id: `message:${message.id}`, message });
-    for (const snapshot of getMessageSnapshots(message)) {
-      if (seenSnapshotIds.has(snapshot.snapshotId)) continue;
-      seenSnapshotIds.add(snapshot.snapshotId);
-      entries.push({
-        type: 'REQUEST_ITEM_SNAPSHOT',
-        id: `snapshot:${snapshot.snapshotId}`,
-        snapshot,
-      });
-    }
+  const latestSnapshotsByItemId = new Map<string, RequestItemSnapshot>();
+  const messageSnapshots = new Map(
+    messages.map((message) => [message.id, getMessageSnapshots(message)])
+  );
+  const hasValidSnapshots = [...messageSnapshots.values()].some((snapshots) => snapshots.length > 0);
+  const legacyItems = !hasValidSnapshots
+    ? [...request.requestItems].sort(
+        (a, b) => a.itemOrder - b.itemOrder || a.id.localeCompare(b.id)
+      )
+    : [];
+  const legacyItemsById = new Map(legacyItems.map((item) => [item.id, item]));
+  const legacyActiveQuestionId = findLegacyActiveQuestionId(messages);
+  const nextEligibleQuestionItemIdAfterIndex: (string | null)[] = Array(messages.length).fill(null);
+  let nextEligibleQuestionItemId: string | null = null;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    nextEligibleQuestionItemIdAfterIndex[index] = nextEligibleQuestionItemId;
+    const target = getQuestionTarget(messages[index]);
+    if (target) nextEligibleQuestionItemId = target.itemId;
   }
+  let legacyItemsAdded = false;
+  let activeQuestionSessionItemId: string | null = null;
 
-  if (seenSnapshotIds.size === 0 && request.requestItems.length > 0) {
-    const currentItems = [...request.requestItems].sort(
-      (a, b) => a.itemOrder - b.itemOrder || a.id.localeCompare(b.id)
-    );
-    for (const item of currentItems) {
+  const addLegacyItems = () => {
+    if (legacyItemsAdded) return;
+    for (const item of legacyItems) {
       entries.push({
         type: 'LEGACY_CURRENT_REQUEST_ITEM',
         id: `legacy-current:${request.id}:${item.id}`,
         item,
       });
     }
+    legacyItemsAdded = true;
+  };
+
+  for (const [messageIndex, message] of messages.entries()) {
+    const target = getQuestionTarget(message);
+    if (!target) {
+      entries.push({ type: 'MESSAGE', id: `message:${message.id}`, message });
+    }
+    for (const snapshot of messageSnapshots.get(message.id) ?? []) {
+      if (seenSnapshotIds.has(snapshot.snapshotId)) continue;
+      seenSnapshotIds.add(snapshot.snapshotId);
+      latestSnapshotsByItemId.set(snapshot.requestItemId, snapshot);
+      const isIntermediateSnapshot =
+        snapshot.status === 'INFO_MISSING' &&
+        activeQuestionSessionItemId === snapshot.requestItemId &&
+        nextEligibleQuestionItemIdAfterIndex[messageIndex] === snapshot.requestItemId;
+      if (!isIntermediateSnapshot) {
+        entries.push({
+          type: 'REQUEST_ITEM_SNAPSHOT',
+          id: `snapshot:${snapshot.snapshotId}`,
+          snapshot,
+        });
+      }
+      if (
+        snapshot.status === 'READY' &&
+        activeQuestionSessionItemId === snapshot.requestItemId
+      ) {
+        activeQuestionSessionItemId = null;
+      }
+    }
+    if (target) {
+      if (message.id === legacyActiveQuestionId) addLegacyItems();
+      const snapshotTitle = latestSnapshotsByItemId.get(target.itemId)?.title;
+      const legacyTitle = !hasValidSnapshots ? legacyItemsById.get(target.itemId)?.title : undefined;
+      const title = snapshotTitle ?? legacyTitle;
+      const startsQuestionSession = activeQuestionSessionItemId !== target.itemId;
+      if (startsQuestionSession && title) {
+        entries.push({
+          type: 'QUESTION_TARGET_INTRO',
+          id: `question-target-intro:${message.id}`,
+          requestItemId: target.itemId,
+          title,
+          message: `${title}에 대해 질문할게요.`,
+        });
+      }
+      entries.push({ type: 'MESSAGE', id: `message:${message.id}`, message });
+      activeQuestionSessionItemId = target.itemId;
+    }
   }
+
+  addLegacyItems();
 
   if (request.decisionPrompt) {
     entries.push({

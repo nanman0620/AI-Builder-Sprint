@@ -1,10 +1,11 @@
 import logging
 import uuid
-from dataclasses import dataclass
-from datetime import date, datetime
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timedelta
 from enum import Enum
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Protocol
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, null, select, update
 from sqlalchemy.exc import IntegrityError
@@ -33,6 +34,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_SEOUL_TZ = ZoneInfo("Asia/Seoul")
+
 
 class Dispatcher(Protocol):
     def register(self, request_id: uuid.UUID) -> None: ...
@@ -47,6 +50,31 @@ CODE_SOLAR_UNAVAILABLE = "SOLAR_UNAVAILABLE"
 # Issue #66 전용 — 그 외 4개 신규 endpoint의 오류는 전부 위 기존 코드를 재사용한다(계획 §10).
 CODE_INVALID_REQUEST_STATE = "INVALID_REQUEST_STATE"
 CODE_MALFORMED_REQUEST = "MALFORMED_REQUEST"
+
+_UNSUPPORTED_INTENT_PAYLOAD_KEY = "_unsupportedIntent"
+_UNSUPPORTED_RECURRENCE_FIELD = "unsupportedRecurrence"
+_UNSUPPORTED_RECURRENCE_FOLLOW_UP = "UNSUPPORTED_TASK_RECURRENCE"
+_UNSUPPORTED_RECURRENCE_MESSAGE = (
+    "반복 계획은 아직 지원하지 않아요.\n"
+    "이번 7일 동안 할 전체 분량과 총 예상 시간을 하나의 일회성 계획으로 다시 알려주세요.\n\n"
+    "예: 8월 8일까지 영어 단어 140개, 총 140분"
+)
+
+
+def _has_unsupported_recurrence_marker(item: SolarRequestItem) -> bool:
+    return (
+        item.entity_type == SolarEntityType.TASK
+        and item.normalized_payload.get(_UNSUPPORTED_INTENT_PAYLOAD_KEY)
+        == solar_client.UNSUPPORTED_RECURRING_TASK_INTENT
+    )
+
+
+def _unsupported_recurrence_pending_question() -> dict:
+    return {
+        "field": _UNSUPPORTED_RECURRENCE_FIELD,
+        "message": _UNSUPPORTED_RECURRENCE_MESSAGE,
+        "followUpType": _UNSUPPORTED_RECURRENCE_FOLLOW_UP,
+    }
 
 # CARD_ANSWER의 fieldValue(1개 필드)를 카드 normalized_payload에 patch할 때 그 필드가 실제로
 # 건드리는 payload 키 목록. CHANGE_INPUT의 CREATE+REQUEST_ITEM changedFields patch와
@@ -70,6 +98,106 @@ _DEFAULT_QUESTION_MESSAGES = {
     "startAt": "시작 시각이 언제인가요?",
     "endAt": "종료 시각이 언제인가요?",
 }
+
+_FIXED_SCHEDULE_DATE_QUESTION = "일정은 정확히 몇 월 며칠인가요? 시작과 종료 시각도 함께 알려주세요."
+
+
+def _fixed_schedule_date_question(item, final_payload: dict) -> tuple[object, dict]:
+    logger.warning(
+        "SOLAR_FIXED_SCHEDULE_DATE_REQUIRES_CONFIRMATION item_action=%s weekday_count=%d",
+        item.action,
+        len(solar_client.extract_explicit_korean_weekdays(item.raw_line_text)),
+    )
+    normalized_payload = dict(final_payload)
+    normalized_payload["startAt"] = None
+    normalized_payload["endAt"] = None
+    return replace(
+        item,
+        missing_fields=["startAt", "endAt"],
+        pending_question={
+            "field": "startAt",
+            "message": _FIXED_SCHEDULE_DATE_QUESTION,
+            "attemptCount": 1,
+        },
+    ), normalized_payload
+
+
+def _normalize_fixed_schedule_weekday(
+    item, final_payload: dict, *, now: datetime
+) -> tuple[object, dict]:
+    """Normalize one-off relative weekdays and reject ambiguous/contradictory dates."""
+    if item.entity_type != "FIXED_SCHEDULE" or item.action == "DELETE":
+        return item, final_payload
+    local_text = solar_client.extract_fixed_schedule_local_clause(
+        item.raw_line_text, title=final_payload.get("title")
+    )
+    weekdays = solar_client.extract_explicit_korean_weekdays(local_text)
+    if (
+        solar_client.has_ambiguous_weekday_expression(local_text)
+        or solar_client.has_clear_fixed_schedule_recurrence_intent(local_text)
+    ):
+        return _fixed_schedule_date_question(item, final_payload)
+    if not weekdays:
+        if solar_client.extract_explicit_week_relation(local_text) is not None:
+            return _fixed_schedule_date_question(item, final_payload)
+        return item, final_payload
+    start_at, end_at = final_payload.get("startAt"), final_payload.get("endAt")
+    if len(weekdays) != 1 or start_at is None or end_at is None:
+        return _fixed_schedule_date_question(item, final_payload)
+    if now.tzinfo is None or now.utcoffset() is None:
+        return _fixed_schedule_date_question(item, final_payload)
+
+    start_local = datetime.fromisoformat(start_at).astimezone(_SEOUL_TZ)
+    end_local = datetime.fromisoformat(end_at).astimezone(_SEOUL_TZ)
+    now_local = now.astimezone(_SEOUL_TZ)
+    target_weekday = weekdays[0]
+
+    raw_time_range = solar_client.extract_explicit_korean_time_range(local_text)
+    if raw_time_range is None:
+        if (
+            not solar_client.has_explicit_time_range(local_text)
+            or solar_client.has_ambiguous_korean_time_range(local_text)
+        ):
+            return _fixed_schedule_date_question(item, final_payload)
+    else:
+        raw_start_time, raw_end_time = raw_time_range
+        if (
+            (start_local.hour, start_local.minute) != (raw_start_time.hour, raw_start_time.minute)
+            or (end_local.hour, end_local.minute) != (raw_end_time.hour, raw_end_time.minute)
+        ):
+            return _fixed_schedule_date_question(item, final_payload)
+
+    if solar_client.has_explicit_absolute_date(local_text):
+        if start_local.weekday() == target_weekday and start_local > now_local:
+            return item, final_payload
+        return _fixed_schedule_date_question(item, final_payload)
+
+    week_relation = solar_client.extract_explicit_week_relation(local_text)
+    current_week_monday = now_local.date() - timedelta(days=now_local.weekday())
+    if week_relation == "THIS_WEEK":
+        target_date = current_week_monday + timedelta(days=target_weekday)
+    elif week_relation == "NEXT_WEEK":
+        target_date = current_week_monday + timedelta(days=7 + target_weekday)
+    else:
+        days_ahead = (target_weekday - now_local.weekday()) % 7
+        target_date = now_local.date() + timedelta(days=days_ahead)
+
+    normalized_start = start_local.replace(
+        year=target_date.year, month=target_date.month, day=target_date.day
+    )
+    if normalized_start <= now_local:
+        if week_relation is not None:
+            return _fixed_schedule_date_question(item, final_payload)
+        normalized_start += timedelta(days=7)
+    duration = end_local - start_local
+    normalized_end = normalized_start + duration
+    if duration.total_seconds() <= 0 or normalized_start.weekday() != target_weekday:
+        return _fixed_schedule_date_question(item, final_payload)
+
+    normalized_payload = dict(final_payload)
+    normalized_payload["startAt"] = normalized_start.isoformat()
+    normalized_payload["endAt"] = normalized_end.isoformat()
+    return item, normalized_payload
 
 # amount/deadlineAt은 DONT_KNOW를 두 번째로 답해도(더 물어볼 방법이 없어) 서버가 확정적인
 # "모름" 값으로 자동 해소한다. 그 외 필드(특히 estimatedMinutes)는 SOLAR가 attemptNumber>=2부터
@@ -334,9 +462,29 @@ def _persist_analysis(
     analysis,
     candidate_tasks: list[dict],
     candidate_fixed_schedules: list[dict],
+    now: datetime,
 ) -> SolarRequest:
     resolved_items: list[tuple] = []
     for item in analysis.items:
+        raw_line_recurring = solar_client.has_clear_task_recurrence_intent(item.raw_line_text)
+        recurring_task = (
+            item.entity_type == "TASK" and item.action != "DELETE" and raw_line_recurring
+        )
+        if (
+            item.entity_type == "TASK"
+            and item.unsupported_intent == solar_client.UNSUPPORTED_RECURRING_TASK_INTENT
+            and not raw_line_recurring
+        ):
+            logger.warning(
+                "SOLAR_RECURRING_TASK_MARKER_REJECTED item_action=%s", item.action
+            )
+        if recurring_task:
+            item = replace(
+                item,
+                missing_fields=["deadlineAt", "estimatedMinutes", "amount"],
+                pending_question=_unsupported_recurrence_pending_question(),
+                unsupported_intent=solar_client.UNSUPPORTED_RECURRING_TASK_INTENT,
+            )
         if item.action == "CREATE":
             final_payload = dict(item.normalized_payload)
             if item.entity_type == "TASK":
@@ -353,6 +501,19 @@ def _persist_analysis(
                 final_payload = _backfill_update_payload(item, target_row)
             else:
                 final_payload = _snapshot_for_delete(item.entity_type, target_row)
+        if recurring_task:
+            # Values extracted from a recurring phrase may be per occurrence, not
+            # totals for the one-off Task contract. Never silently reuse them.
+            final_payload.update(
+                deadlineAt=None,
+                estimatedMinutes=None,
+                estimatedMinutesSource=None,
+                remainingMinutes=None,
+                amountText=None,
+                amountSource=None,
+            )
+            final_payload[_UNSUPPORTED_INTENT_PAYLOAD_KEY] = solar_client.UNSUPPORTED_RECURRING_TASK_INTENT
+        item, final_payload = _normalize_fixed_schedule_weekday(item, final_payload, now=now)
         resolved_items.append((item, final_payload))
 
     has_missing = any(item.missing_fields for item, _ in resolved_items)
@@ -484,6 +645,11 @@ def _persist_analysis(
                     message_metadata={
                         "itemId": str(current_db_item.id),
                         "field": current_db_item.pending_question["field"],
+                        **(
+                            {"followUpType": current_db_item.pending_question["followUpType"]}
+                            if current_db_item.pending_question.get("followUpType")
+                            else {}
+                        ),
                     },
                 )
             )
@@ -571,6 +737,7 @@ def create_solar_request(
                     analysis=analysis,
                     candidate_tasks=candidate_tasks,
                     candidate_fixed_schedules=candidate_fixed_schedules,
+                    now=now,
                 )
                 created = True
     except IntegrityError as exc:
@@ -755,6 +922,10 @@ def _ensure_pending_question(card: SolarRequestItem) -> None:
     if card.status != SolarItemStatus.INFO_MISSING:
         return
 
+    if _has_unsupported_recurrence_marker(card):
+        card.status = SolarItemStatus.INFO_MISSING
+        card.pending_question = _unsupported_recurrence_pending_question()
+        return
     order = solar_client.missing_order_for(card.entity_type.value, _missing_order_action_for(card))
     canonical_first = next((f for f in order if f in card.missing_fields), None)
     if canonical_first is None:
@@ -838,7 +1009,10 @@ def _build_trailing_question_entry(request: SolarRequest, items: list[SolarReque
     card = next((i for i in items if i.item_order == request.current_item_order), None)
     if card is None or not isinstance(card.pending_question, dict):
         return {}
-    return {"itemId": str(card.id), "field": card.pending_question.get("field")}
+    metadata = {"itemId": str(card.id), "field": card.pending_question.get("field")}
+    if card.pending_question.get("followUpType"):
+        metadata["followUpType"] = card.pending_question["followUpType"]
+    return metadata
 
 
 def _sync_remaining_minutes_for_create(payload: dict, entity_type: str, action: SolarAction) -> dict:
@@ -1029,7 +1203,7 @@ def _live_candidate_ids_for_unresolved(
 
 @dataclass(frozen=True)
 class _MessageDispatch:
-    kind: str  # "CARD" | "UNRESOLVED" | "CHANGE_DETAILS" | "CHANGE_INPUT"
+    kind: str  # "CARD" | "UNRESOLVED" | "CHANGE_DETAILS" | "UNSUPPORTED_TASK_RECURRENCE" | "CHANGE_INPUT"
     card: SolarRequestItem | None = None
     special_message: SolarMessage | None = None
 
@@ -1046,7 +1220,13 @@ def _resolve_message_dispatch(
         special = _find_special_question_message(messages)
         if special is not None:
             metadata = special.message_metadata
-            kind = "CHANGE_DETAILS" if isinstance(metadata, dict) and metadata.get("followUpType") == "CHANGE_DETAILS" else "UNRESOLVED"
+            follow_up_type = metadata.get("followUpType") if isinstance(metadata, dict) else None
+            if follow_up_type == _UNSUPPORTED_RECURRENCE_FOLLOW_UP:
+                kind = "UNSUPPORTED_TASK_RECURRENCE"
+            elif follow_up_type == "CHANGE_DETAILS":
+                kind = "CHANGE_DETAILS"
+            else:
+                kind = "UNRESOLVED"
             return _MessageDispatch(kind=kind, special_message=special)
 
         pending_item = next(
@@ -1581,6 +1761,31 @@ def add_solar_message(
                 else 1,
                 "card_context": _card_context_for_prompt(card),
             }
+        elif dispatch.kind == "UNSUPPORTED_TASK_RECURRENCE":
+            metadata = dispatch.special_message.message_metadata
+            item_id = metadata.get("itemId") if isinstance(metadata, dict) else None
+            card = _find_item_by_id(item_id, items) if isinstance(item_id, str) else None
+            if card is None or not _has_unsupported_recurrence_marker(card):
+                raise ApiError(409, CODE_INVALID_REQUEST_STATE, "반복 계획 안내 상태가 변경됐어요. 다시 시도해 주세요.")
+            plan_cycle_id = request.plan_cycle_id
+            if plan_cycle_id is not None:
+                cycle = plan_block_service.get_owned_planning_cycle(db, plan_cycle_id, user_id)
+                cycle_start, cycle_end = cycle.start_date, cycle.end_date
+                candidate_tasks = _fetch_candidate_tasks(db, user_id, plan_cycle_id)
+                candidate_fixed_schedules = _fetch_candidate_fixed_schedules(db, user_id, plan_cycle_id)
+            else:
+                cycle_start = cycle_end = None
+                candidate_tasks = []
+                candidate_fixed_schedules = []
+            call_ctx = {
+                "card_id": card.id,
+                "purpose": request.purpose,
+                "cycle_start": cycle_start,
+                "cycle_end": cycle_end,
+                "candidate_tasks": candidate_tasks,
+                "candidate_fixed_schedules": candidate_fixed_schedules,
+                "candidate_request_items": _build_candidate_request_items(items),
+            }
         elif dispatch.kind in ("UNRESOLVED", "CHANGE_DETAILS"):
             metadata = dispatch.special_message.message_metadata
             if dispatch.kind == "UNRESOLVED":
@@ -1666,6 +1871,24 @@ def add_solar_message(
                 attempt_number=call_ctx["attempt_number"],
                 card_context=call_ctx["card_context"],
             )
+        elif dispatch.kind == "UNSUPPORTED_TASK_RECURRENCE":
+            if solar_client.has_clear_task_recurrence_intent(canonical_message):
+                result = SimpleNamespace(
+                    analysis_message="반복 계획 대신 이번 7일 동안의 전체 분량과 총 예상 시간을 알려주세요.",
+                    operations=[],
+                    unresolved_operation=None,
+                )
+            else:
+                result = solar_client.analyze_change_input(
+                    canonical_message,
+                    now=now,
+                    purpose=call_ctx["purpose"],
+                    cycle_start=call_ctx["cycle_start"],
+                    cycle_end=call_ctx["cycle_end"],
+                    candidate_tasks=call_ctx["candidate_tasks"],
+                    candidate_fixed_schedules=call_ctx["candidate_fixed_schedules"],
+                    candidate_request_items=call_ctx["candidate_request_items"],
+                )
         elif dispatch.kind in ("UNRESOLVED", "CHANGE_DETAILS"):
             result = solar_client.analyze_unresolved_answer(
                 canonical_message,
@@ -1755,6 +1978,53 @@ def add_solar_message(
                 entries.append(_assistant_question_entry(content, _build_trailing_question_entry(request, items)))
             elif kind == SolarMessageKind.TEXT.value:
                 entries.append(_assistant_text_entry(content))
+
+        elif dispatch.kind == "UNSUPPORTED_TASK_RECURRENCE":
+            card = _find_item_by_id(str(call_ctx["card_id"]), items)
+            if card is None or not _has_unsupported_recurrence_marker(card):
+                raise ApiError(409, CODE_INVALID_REQUEST_STATE, "반복 계획 안내 상태가 변경됐어요. 다시 시도해 주세요.")
+            required_total_fields = {"deadlineAt", "estimatedMinutes", "amount"}
+            matching_patches = [
+                operation
+                for operation in result.operations
+                if isinstance(operation, solar_client.ChangeInputPatchRequestItemOperation)
+                and operation.request_item_id == str(card.id)
+                and operation.entity_type == "TASK"
+            ]
+            can_clear_marker = (
+                len(result.operations) == 1
+                and len(matching_patches) == 1
+                and required_total_fields.issubset(set(matching_patches[0].changed_fields))
+                and not matching_patches[0].missing_fields
+                and not solar_client.has_clear_task_recurrence_intent(canonical_message)
+            )
+            if can_clear_marker:
+                card.normalized_payload.pop(_UNSUPPORTED_INTENT_PAYLOAD_KEY, None)
+                _apply_change_input_operations(
+                    db, user_id=user_id, request=request, items=items, analysis=result,
+                    raw_line_text=canonical_message,
+                )
+                kind, content = _recompute_request_collecting_state(request, items)
+                if kind == SolarMessageKind.QUESTION.value:
+                    entries.append(_assistant_question_entry(content, _build_trailing_question_entry(request, items)))
+                elif kind == SolarMessageKind.TEXT.value:
+                    entries.append(_assistant_text_entry(content))
+            else:
+                card.status = SolarItemStatus.INFO_MISSING
+                card.missing_fields = ["deadlineAt", "estimatedMinutes", "amount"]
+                card.pending_question = _unsupported_recurrence_pending_question()
+                request.status = SolarRequestStatus.COLLECTING
+                request.current_item_order = card.item_order
+                entries.append(
+                    _assistant_question_entry(
+                        _UNSUPPORTED_RECURRENCE_MESSAGE,
+                        {
+                            "followUpType": _UNSUPPORTED_RECURRENCE_FOLLOW_UP,
+                            "itemId": str(card.id),
+                            "field": _UNSUPPORTED_RECURRENCE_FIELD,
+                        },
+                    )
+                )
 
         elif dispatch.kind in ("UNRESOLVED", "CHANGE_DETAILS"):
             special_now = dispatch_now.special_message
@@ -1937,6 +2207,10 @@ def _validate_execution_preconditions(db: Session, request: SolarRequest) -> Non
     """execute/retry 직전 검증. request row lock을 쥔 트랜잭션 안에서만 호출해야 한다 — lock
     밖에서 먼저 호출하면 검증과 조건부 UPDATE 사이에 cycle·정산·대상이 바뀔 수 있다(TOCTOU).
     DB를 쓰지 않는다 — 실패하면 ApiError를 raise한다."""
+    request_items = _load_items(db, request.id)
+    if any(_has_unsupported_recurrence_marker(item) for item in request_items):
+        raise ApiError(409, CODE_INVALID_REQUEST_STATE, "반복 계획은 일회성 총량으로 다시 입력해 주세요.")
+
     if request.purpose == SolarRequestPurpose.NEW_CYCLE:
         if plan_block_service.get_active_planning_cycle(db, request.user_id) is not None:
             raise ApiError(409, CODE_ACTIVE_CYCLE_EXISTS, "이미 진행 중인 계획 기간이 있어요.")
@@ -1949,7 +2223,7 @@ def _validate_execution_preconditions(db: Session, request: SolarRequest) -> Non
     if check_in_service.get_finalizing_info(db, request.user_id) is not None:
         raise ApiError(409, CODE_SETTLEMENT_IN_PROGRESS, "정산이 진행 중이에요. 잠시 후 다시 시도해 주세요.")
 
-    for item in _load_items(db, request.id):
+    for item in request_items:
         if item.action == SolarAction.CREATE:
             continue
         target_id = item.target_task_id or item.target_fixed_schedule_id

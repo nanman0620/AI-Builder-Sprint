@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -531,6 +531,450 @@ def test_create_solar_request_collecting_adds_question_message(monkeypatch, patc
     assert question_message.content == "마감이 언제인가요?"
     assert question_message.message_metadata["field"] == "deadlineAt"
     assert question_message.message_metadata["itemId"] == str(fake_db.added[1].id)
+
+
+def test_create_recurring_task_stays_collecting_and_clears_occurrence_values(
+    monkeypatch, patch_plan_management_state
+):
+    item = _create_item(
+        raw_line_text="매일 영어 단어 20개씩 외울래",
+        normalized_payload={
+            "title": "영어 단어 암기",
+            "deadlineAt": "2026-08-31T23:59:59+09:00",
+            "estimatedMinutes": 20,
+            "estimatedMinutesSource": "USER",
+            "remainingMinutes": None,
+            "amountText": "20개",
+            "amountSource": "USER",
+        },
+        unsupported_intent="RECURRING_TASK",
+    )
+    analysis = SolarAnalysisResult(analysis_message="분석 완료", items=[item], unresolved_line=None)
+    _patch_analyze_message(monkeypatch, result=analysis)
+    fake_db = _CreateFakeSession(current_request_sequence=[None, None], active_cycle_sequence=[None, None])
+
+    result = _call_create(fake_db, client_event_id="evt-recurring", message="매일 영어 단어 20개씩 외울래")
+
+    assert result.created is True
+    request_obj, item_obj = fake_db.added[:2]
+    assert request_obj.status == SolarRequestStatus.COLLECTING
+    assert item_obj.status == SolarItemStatus.INFO_MISSING
+    assert item_obj.normalized_payload["_unsupportedIntent"] == "RECURRING_TASK"
+    assert item_obj.normalized_payload["deadlineAt"] is None
+    assert item_obj.normalized_payload["estimatedMinutes"] is None
+    assert item_obj.normalized_payload["amountText"] is None
+    question = fake_db.added[-1]
+    assert question.message_metadata == {
+        "itemId": str(item_obj.id),
+        "field": "unsupportedRecurrence",
+        "followUpType": "UNSUPPORTED_TASK_RECURRENCE",
+    }
+    assert "반복 계획은 아직 지원하지 않아요" in question.content
+    assert "전체 분량" in question.content
+    assert "총 예상 시간" in question.content
+
+
+def test_create_rejects_false_structured_recurring_marker_per_item(
+    monkeypatch, patch_plan_management_state, caplog
+):
+    item = _create_item(
+        raw_line_text="8월 7일까지 운영체제 과제 2문제 해야 해",
+        normalized_payload={
+            "title": "운영체제 과제",
+            "deadlineAt": "2026-08-07T23:59:59+09:00",
+            "estimatedMinutes": None,
+            "estimatedMinutesSource": None,
+            "remainingMinutes": None,
+            "amountText": "2문제",
+            "amountSource": "USER",
+        },
+        missing_fields=["estimatedMinutes"],
+        pending_question={"field": "estimatedMinutes", "message": "예상 시간이 얼마나 걸릴까요?"},
+        unsupported_intent="RECURRING_TASK",
+    )
+    analysis = SolarAnalysisResult(analysis_message="분석 완료", items=[item], unresolved_line=None)
+    _patch_analyze_message(monkeypatch, result=analysis)
+    fake_db = _CreateFakeSession(current_request_sequence=[None, None], active_cycle_sequence=[None, None])
+
+    with caplog.at_level("WARNING", logger="app.services.solar_request_service"):
+        _call_create(fake_db, client_event_id="evt-false-recurring", message=item.raw_line_text)
+
+    item_obj = fake_db.added[1]
+    assert "_unsupportedIntent" not in item_obj.normalized_payload
+    assert item_obj.missing_fields == ["estimatedMinutes"]
+    assert item_obj.pending_question["field"] == "estimatedMinutes"
+    assert any("SOLAR_RECURRING_TASK_MARKER_REJECTED" in record.message for record in caplog.records)
+
+
+def test_create_multiple_tasks_keeps_recurrence_marker_on_matching_item_only(
+    monkeypatch, patch_plan_management_state
+):
+    one_off = _create_item(
+        raw_line_text="운영체제 과제 해야 해",
+        normalized_payload={
+            "title": "운영체제 과제",
+            "deadlineAt": None,
+            "estimatedMinutes": 120,
+            "estimatedMinutesSource": "USER",
+            "remainingMinutes": None,
+            "amountText": None,
+            "amountSource": "UNKNOWN",
+        },
+        unsupported_intent="RECURRING_TASK",
+    )
+    recurring = _create_item(
+        raw_line_text="매일 영어 단어를 외울래",
+        normalized_payload={
+            "title": "영어 단어 암기",
+            "deadlineAt": None,
+            "estimatedMinutes": 20,
+            "estimatedMinutesSource": "USER",
+            "remainingMinutes": None,
+            "amountText": None,
+            "amountSource": "UNKNOWN",
+        },
+    )
+    analysis = SolarAnalysisResult(
+        analysis_message="분석 완료", items=[one_off, recurring], unresolved_line=None
+    )
+    _patch_analyze_message(monkeypatch, result=analysis)
+    fake_db = _CreateFakeSession(current_request_sequence=[None, None], active_cycle_sequence=[None, None])
+
+    _call_create(fake_db, client_event_id="evt-isolated-recurring", message="두 작업")
+
+    one_off_obj, recurring_obj = fake_db.added[1:3]
+    assert one_off_obj.id != recurring_obj.id
+    assert "_unsupportedIntent" not in one_off_obj.normalized_payload
+    assert one_off_obj.status == SolarItemStatus.READY
+    assert recurring_obj.normalized_payload["_unsupportedIntent"] == "RECURRING_TASK"
+    assert recurring_obj.status == SolarItemStatus.INFO_MISSING
+    question = fake_db.added[-1]
+    assert question.message_metadata["itemId"] == str(recurring_obj.id)
+    assert question.message_metadata["followUpType"] == "UNSUPPORTED_TASK_RECURRENCE"
+
+
+@pytest.mark.parametrize(
+    ("solar_start", "solar_end"),
+    [
+        ("2026-08-01T10:00:00+09:00", "2026-08-01T16:00:00+09:00"),
+        ("2026-08-02T10:00:00+09:00", "2026-08-02T16:00:00+09:00"),
+    ],
+)
+def test_create_fixed_schedule_relative_weekday_normalizes_wrong_or_past_solar_date(
+    monkeypatch, patch_plan_management_state, solar_start, solar_end
+):
+    now = datetime(2026, 8, 2, 14, 17, tzinfo=timezone(timedelta(hours=9)))
+    item = _create_item(
+        entity_type="FIXED_SCHEDULE",
+        raw_line_text="토요일 오전 10시부터 오후 4시까지 알바",
+        normalized_payload={"title": "알바", "startAt": solar_start, "endAt": solar_end},
+    )
+    analysis = SolarAnalysisResult(analysis_message="분석 완료", items=[item], unresolved_line=None)
+    _patch_analyze_message(monkeypatch, result=analysis)
+    fake_db = _CreateFakeSession(current_request_sequence=[None, None], active_cycle_sequence=[None, None])
+
+    _call_create(
+        fake_db, client_event_id=f"evt-relative-{solar_start}", message=item.raw_line_text, now=now
+    )
+
+    request_obj, item_obj = fake_db.added[:2]
+    assert request_obj.status == SolarRequestStatus.CHANGE_CONFIRMATION
+    assert item_obj.status == SolarItemStatus.READY
+    assert item_obj.normalized_payload["startAt"] == "2026-08-08T10:00:00+09:00"
+    assert item_obj.normalized_payload["endAt"] == "2026-08-08T16:00:00+09:00"
+    assert item_obj.pending_question is None
+
+
+def test_create_compound_input_scopes_task_date_out_of_fixed_schedule_normalization(
+    monkeypatch, patch_plan_management_state
+):
+    compound = (
+        "8월 7일까지 운영체제 과제 2문제 해야 하고, "
+        "토요일 오전 10시부터 오후 4시까지 알바 있어"
+    )
+    task = _create_item(
+        raw_line_text="8월 7일까지 운영체제 과제 2문제 해야 해",
+        normalized_payload={
+            "title": "운영체제 과제",
+            "deadlineAt": "2026-08-07T23:59:59+09:00",
+            "estimatedMinutes": None,
+            "estimatedMinutesSource": None,
+            "remainingMinutes": None,
+            "amountText": "2문제",
+            "amountSource": "USER",
+        },
+        missing_fields=["estimatedMinutes"],
+        pending_question={"field": "estimatedMinutes", "message": "예상 시간이 얼마나 걸릴까요?"},
+    )
+    fixed = _create_item(
+        entity_type="FIXED_SCHEDULE",
+        raw_line_text=compound,
+        normalized_payload={
+            "title": "알바",
+            "startAt": "2026-08-01T10:00:00+09:00",
+            "endAt": "2026-08-01T16:00:00+09:00",
+        },
+    )
+    analysis = SolarAnalysisResult(
+        analysis_message="분석 완료", items=[task, fixed], unresolved_line=None
+    )
+    _patch_analyze_message(monkeypatch, result=analysis)
+    fake_db = _CreateFakeSession(current_request_sequence=[None, None], active_cycle_sequence=[None, None])
+
+    _call_create(
+        fake_db,
+        client_event_id="evt-compound-fixed-scope",
+        message=compound,
+        now=datetime(2026, 8, 2, 14, 28, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    task_obj, fixed_obj = fake_db.added[1:3]
+    assert task_obj.normalized_payload["deadlineAt"] == "2026-08-07T23:59:59+09:00"
+    assert task_obj.missing_fields == ["estimatedMinutes"]
+    assert fixed_obj.status == SolarItemStatus.READY
+    assert fixed_obj.normalized_payload["startAt"] == "2026-08-08T10:00:00+09:00"
+    assert fixed_obj.normalized_payload["endAt"] == "2026-08-08T16:00:00+09:00"
+    assert fixed_obj.missing_fields == []
+    assert fixed_obj.pending_question is None
+    question = fake_db.added[-1]
+    assert question.message_metadata["itemId"] == str(task_obj.id)
+    assert question.message_metadata["field"] == "estimatedMinutes"
+
+
+@pytest.mark.parametrize(
+    ("raw_line_text", "start_at", "end_at", "expected_status"),
+    [
+        (
+            "토요일 오전 10시 - 오후 4시 알바",
+            "2026-08-01T10:00:00+09:00",
+            "2026-08-01T16:00:00+09:00",
+            SolarItemStatus.READY,
+        ),
+        (
+            "토요일 오전 10시부터 오후 4시까지 알바",
+            "2026-08-01T11:00:00+09:00",
+            "2026-08-01T17:00:00+09:00",
+            SolarItemStatus.INFO_MISSING,
+        ),
+    ],
+)
+def test_create_fixed_schedule_prefers_valid_structured_time_but_rejects_clear_raw_conflict(
+    monkeypatch, patch_plan_management_state, raw_line_text, start_at, end_at, expected_status
+):
+    item = _create_item(
+        entity_type="FIXED_SCHEDULE",
+        raw_line_text=raw_line_text,
+        normalized_payload={"title": "알바", "startAt": start_at, "endAt": end_at},
+    )
+    analysis = SolarAnalysisResult(analysis_message="분석 완료", items=[item], unresolved_line=None)
+    _patch_analyze_message(monkeypatch, result=analysis)
+    fake_db = _CreateFakeSession(current_request_sequence=[None, None], active_cycle_sequence=[None, None])
+
+    _call_create(
+        fake_db,
+        client_event_id=f"evt-structured-time-{expected_status.value}",
+        message=raw_line_text,
+        now=datetime(2026, 8, 2, 14, 28, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    item_obj = fake_db.added[1]
+    assert item_obj.status == expected_status
+    if expected_status == SolarItemStatus.READY:
+        assert item_obj.normalized_payload["startAt"] == "2026-08-08T10:00:00+09:00"
+        assert item_obj.normalized_payload["endAt"] == "2026-08-08T16:00:00+09:00"
+    else:
+        assert item_obj.normalized_payload["startAt"] is None
+        assert item_obj.normalized_payload["endAt"] is None
+
+
+@pytest.mark.parametrize(
+    ("now", "expected_date"),
+    [
+        (datetime(2026, 8, 8, 9, 0, tzinfo=timezone(timedelta(hours=9))), "2026-08-08"),
+        (datetime(2026, 8, 8, 14, 0, tzinfo=timezone(timedelta(hours=9))), "2026-08-15"),
+    ],
+)
+def test_create_fixed_schedule_same_weekday_uses_today_before_start_else_next_week(
+    monkeypatch, patch_plan_management_state, now, expected_date
+):
+    item = _create_item(
+        entity_type="FIXED_SCHEDULE",
+        raw_line_text="토요일 오전 10시부터 오후 4시까지 알바",
+        normalized_payload={
+            "title": "알바",
+            "startAt": "2026-08-01T10:00:00+09:00",
+            "endAt": "2026-08-01T16:00:00+09:00",
+        },
+    )
+    analysis = SolarAnalysisResult(analysis_message="분석 완료", items=[item], unresolved_line=None)
+    _patch_analyze_message(monkeypatch, result=analysis)
+    fake_db = _CreateFakeSession(current_request_sequence=[None, None], active_cycle_sequence=[None, None])
+
+    _call_create(fake_db, client_event_id=f"evt-same-{expected_date}", message=item.raw_line_text, now=now)
+
+    item_obj = fake_db.added[1]
+    assert item_obj.normalized_payload["startAt"] == f"{expected_date}T10:00:00+09:00"
+    assert item_obj.normalized_payload["endAt"] == f"{expected_date}T16:00:00+09:00"
+
+
+def test_create_fixed_schedule_absolute_date_weekday_mismatch_asks_exact_date(
+    monkeypatch, patch_plan_management_state
+):
+    item = _create_item(
+        entity_type="FIXED_SCHEDULE",
+        raw_line_text="8월 2일 토요일 오전 10시부터 오후 4시까지 알바",
+        normalized_payload={
+            "title": "알바",
+            "startAt": "2026-08-02T10:00:00+09:00",
+            "endAt": "2026-08-02T16:00:00+09:00",
+        },
+    )
+    analysis = SolarAnalysisResult(analysis_message="분석 완료", items=[item], unresolved_line=None)
+    _patch_analyze_message(monkeypatch, result=analysis)
+    fake_db = _CreateFakeSession(current_request_sequence=[None, None], active_cycle_sequence=[None, None])
+
+    _call_create(
+        fake_db,
+        client_event_id="evt-weekday-mismatch",
+        message=item.raw_line_text,
+        now=datetime(2026, 8, 1, 9, 0, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    request_obj, item_obj = fake_db.added[:2]
+    assert request_obj.status == SolarRequestStatus.COLLECTING
+    assert item_obj.status == SolarItemStatus.INFO_MISSING
+    assert item_obj.normalized_payload["startAt"] is None
+    assert item_obj.normalized_payload["endAt"] is None
+    assert item_obj.missing_fields == ["startAt", "endAt"]
+    assert item_obj.pending_question["field"] == "startAt"
+    assert "정확히 몇 월 며칠" in item_obj.pending_question["message"]
+
+
+@pytest.mark.parametrize(
+    "raw_line_text",
+    [
+        "토요일이나 일요일에 알바",
+        "토요일 또는 일요일에 알바",
+        "주말에 알바",
+        "매주 토요일 오전 10시부터 오후 4시까지 알바",
+        "토요일마다 오전 10시부터 오후 4시까지 알바",
+        "토요일에 알바",
+    ],
+)
+def test_create_fixed_schedule_ambiguous_recurring_or_missing_time_asks_date(
+    monkeypatch, patch_plan_management_state, raw_line_text
+):
+    item = _create_item(
+        entity_type="FIXED_SCHEDULE",
+        raw_line_text=raw_line_text,
+        normalized_payload={
+            "title": "알바",
+            "startAt": "2026-08-08T10:00:00+09:00",
+            "endAt": "2026-08-08T16:00:00+09:00",
+        },
+    )
+    analysis = SolarAnalysisResult(analysis_message="분석 완료", items=[item], unresolved_line=None)
+    _patch_analyze_message(monkeypatch, result=analysis)
+    fake_db = _CreateFakeSession(current_request_sequence=[None, None], active_cycle_sequence=[None, None])
+
+    _call_create(
+        fake_db,
+        client_event_id=f"evt-ambiguous-{len(raw_line_text)}",
+        message=raw_line_text,
+        now=datetime(2026, 8, 2, 14, 17, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    item_obj = fake_db.added[1]
+    assert item_obj.status == SolarItemStatus.INFO_MISSING
+    assert item_obj.normalized_payload["startAt"] is None
+    assert item_obj.normalized_payload["endAt"] is None
+
+
+def test_create_fixed_schedule_explicit_next_week_uses_next_week_date(
+    monkeypatch, patch_plan_management_state
+):
+    item = _create_item(
+        entity_type="FIXED_SCHEDULE",
+        raw_line_text="다음 주 토요일 오전 10시부터 오후 4시까지 알바",
+        normalized_payload={
+            "title": "알바",
+            "startAt": "2026-08-08T10:00:00+09:00",
+            "endAt": "2026-08-08T16:00:00+09:00",
+        },
+    )
+    analysis = SolarAnalysisResult(analysis_message="분석 완료", items=[item], unresolved_line=None)
+    _patch_analyze_message(monkeypatch, result=analysis)
+    fake_db = _CreateFakeSession(current_request_sequence=[None, None], active_cycle_sequence=[None, None])
+
+    _call_create(
+        fake_db,
+        client_event_id="evt-next-week",
+        message=item.raw_line_text,
+        now=datetime(2026, 8, 2, 14, 17, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    item_obj = fake_db.added[1]
+    assert item_obj.normalized_payload["startAt"] == "2026-08-08T10:00:00+09:00"
+    assert item_obj.normalized_payload["endAt"] == "2026-08-08T16:00:00+09:00"
+
+
+def test_create_fixed_schedule_relative_weekday_uses_seoul_date_across_utc_midnight_boundary(
+    monkeypatch, patch_plan_management_state
+):
+    item = _create_item(
+        entity_type="FIXED_SCHEDULE",
+        raw_line_text="토요일 오전 10시부터 오후 4시까지 알바",
+        normalized_payload={
+            "title": "알바",
+            "startAt": "2026-08-01T01:00:00Z",
+            "endAt": "2026-08-01T07:00:00Z",
+        },
+    )
+    analysis = SolarAnalysisResult(analysis_message="분석 완료", items=[item], unresolved_line=None)
+    _patch_analyze_message(monkeypatch, result=analysis)
+    fake_db = _CreateFakeSession(current_request_sequence=[None, None], active_cycle_sequence=[None, None])
+
+    _call_create(
+        fake_db,
+        client_event_id="evt-seoul-midnight",
+        message=item.raw_line_text,
+        now=datetime(2026, 8, 1, 15, 30, tzinfo=timezone.utc),
+    )
+
+    item_obj = fake_db.added[1]
+    assert item_obj.normalized_payload["startAt"] == "2026-08-08T10:00:00+09:00"
+    assert item_obj.normalized_payload["endAt"] == "2026-08-08T16:00:00+09:00"
+
+
+@pytest.mark.parametrize(
+    "raw_line_text",
+    [
+        "8월 8일 토요일 오전 10시부터 오후 4시까지 알바",
+        "8월 8일 오전 10시부터 오후 4시까지 알바",
+    ],
+)
+def test_create_fixed_schedule_matching_or_absent_weekday_remains_ready(
+    monkeypatch, patch_plan_management_state, raw_line_text
+):
+    item = _create_item(
+        entity_type="FIXED_SCHEDULE",
+        raw_line_text=raw_line_text,
+        normalized_payload={
+            "title": "알바",
+            "startAt": "2026-08-08T10:00:00+09:00",
+            "endAt": "2026-08-08T16:00:00+09:00",
+        },
+    )
+    analysis = SolarAnalysisResult(analysis_message="분석 완료", items=[item], unresolved_line=None)
+    _patch_analyze_message(monkeypatch, result=analysis)
+    fake_db = _CreateFakeSession(current_request_sequence=[None, None], active_cycle_sequence=[None, None])
+
+    _call_create(fake_db, client_event_id=f"evt-weekday-{len(raw_line_text)}", message=raw_line_text)
+
+    request_obj, item_obj = fake_db.added[:2]
+    assert request_obj.status == SolarRequestStatus.CHANGE_CONFIRMATION
+    assert item_obj.status == SolarItemStatus.READY
+    assert item_obj.normalized_payload["startAt"] == "2026-08-08T10:00:00+09:00"
 
 
 def test_create_solar_request_active_cycle_update_remaining_minutes_only(monkeypatch, patch_plan_management_state):

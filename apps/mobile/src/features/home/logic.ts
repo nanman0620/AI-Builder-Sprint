@@ -77,6 +77,33 @@ export function resolveScoreBand(score: number): ScoreBand {
   return 'SCORE_00';
 }
 
+function resolveScoreFeedback(score: number): string {
+  const scoreBand = resolveScoreBand(score);
+
+  if (scoreBand === 'SCORE_100') {
+    return '오늘 계획을 모두 이어냈어요!';
+  }
+  if (scoreBand === 'SCORE_60') {
+    return '잘하고 있어요, 이 흐름 그대로!';
+  }
+  if (scoreBand === 'SCORE_30') {
+    return '좋아요, 흐름을 만들고 있어요';
+  }
+  return '괜찮아요, 다시 이어가면 돼요';
+}
+
+export function resolveProgressFeedback(percentage: number): string {
+  return resolveScoreFeedback(percentage);
+}
+
+export function resolveCheckInFeedback(score: number, cycleEnded: boolean): string {
+  if (cycleEnded) {
+    return '7일의 계획이 모두 끝났어요';
+  }
+
+  return resolveScoreFeedback(score);
+}
+
 // IN_PROGRESS에서도 서버의 progress.percentage를 같은 네 개의 정적 자산 구간에 매핑한다.
 // percentage는 HomeProgress에서 number로 고정되어 있고, 체크 직후 optimistic/server progress가
 // 모두 이 함수로 다시 파생되므로 100%가 기본 마스코트로 남지 않는다.
@@ -155,8 +182,44 @@ export function applyOptimisticCheckState(
   );
 }
 
+export function replacePlanBlock(
+  planBlocks: HomePlanBlock[],
+  replacement: HomePlanBlock
+): HomePlanBlock[] {
+  return planBlocks.map((block) => (block.id === replacement.id ? replacement : block));
+}
+
+export class PlanBlockPendingRegistry {
+  private readonly tokens = new Map<string, symbol>();
+
+  begin(planBlockId: string): symbol | null {
+    if (this.tokens.has(planBlockId)) {
+      return null;
+    }
+    const token = Symbol(planBlockId);
+    this.tokens.set(planBlockId, token);
+    return token;
+  }
+
+  owns(planBlockId: string, token: symbol): boolean {
+    return this.tokens.get(planBlockId) === token;
+  }
+
+  finish(planBlockId: string, token: symbol): boolean {
+    if (!this.owns(planBlockId, token)) {
+      return false;
+    }
+    this.tokens.delete(planBlockId);
+    return true;
+  }
+
+  clear(): void {
+    this.tokens.clear();
+  }
+}
+
 // docs/ai/IMPLEMENTATION_CONTEXT.md 8절 "진행률": 완료 개수/전체 개수(=PLANNED+CHECKED), 시간 비율이 아니다.
-// 서버 응답이 오기 전까지의 로컬 예측치이며, 성공 응답이 오면 서버 progress로 덮어쓴다.
+// optimistic 상태와 ID별 서버 응답 병합 뒤 모두 같은 계산을 사용해 병렬 응답 순서와 무관하게 유지한다.
 export function computeOptimisticProgress(planBlocks: HomePlanBlock[]): HomeProgress {
   const totalCount = planBlocks.length;
   const checkedCount = planBlocks.filter((block) => block.status === 'CHECKED').length;
