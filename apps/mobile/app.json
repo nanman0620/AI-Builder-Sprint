@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "AI-Builder-Sprint",
+    "name": "이음",
     "slug": "AI-Builder-Sprint",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -12,6 +12,7 @@
       "supportsTablet": true
     },
     "android": {
+"package": "com.jennishin.ieum",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -43,6 +44,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "05e1458f-ea40-4434-ad9c-04d64dac6d32"
+      }
     }
   }
 }
