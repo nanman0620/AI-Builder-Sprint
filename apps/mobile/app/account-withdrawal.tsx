@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Alert, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 
@@ -12,6 +12,7 @@ import { signOut } from '@/src/features/auth/services/auth-service';
 import { forceClearLocalSession, isLocalSessionCleared } from '@/src/features/auth/services/local-session';
 import { useBootstrap } from '@/src/features/bootstrap/bootstrap-context';
 import { apiRequest } from '@/src/services/api/client';
+import { showAlert } from '@/src/utils/alert';
 
 const mascotSad = require('@/assets/brand/mascot-sad.png');
 
@@ -57,7 +58,7 @@ export default function AccountWithdrawalScreen() {
         resetAppSync,
         resetBootstrap,
         onSuccess: () => {
-          Alert.alert('회원탈퇴 완료', '회원탈퇴가 완료되었습니다.', [
+          showAlert('회원탈퇴 완료', '회원탈퇴가 완료되었습니다.', [
             {
               text: '확인',
               onPress: () => router.replace('/(auth)/login'),
@@ -65,13 +66,13 @@ export default function AccountWithdrawalScreen() {
           ]);
         },
         onAuthDeletionFailed: () => {
-          Alert.alert('알림', '탈퇴 데이터는 삭제됐지만 계정 삭제가 완료되지 않았어요. 다시 시도해 주세요.');
+          showAlert('알림', '탈퇴 데이터는 삭제됐지만 계정 삭제가 완료되지 않았어요. 다시 시도해 주세요.');
         },
         onGenericError: () => {
-          Alert.alert('오류', '회원탈퇴 처리 중 문제가 발생했습니다. 다시 시도해 주세요.');
+          showAlert('오류', '회원탈퇴 처리 중 문제가 발생했습니다. 다시 시도해 주세요.');
         },
         onLocalSessionCleanupFailed: () => {
-          Alert.alert(
+          showAlert(
             '알림',
             '계정 삭제는 완료됐지만 기기에서 로그인 정보를 완전히 지우지 못했어요. 앱을 다시 시작해 주세요.'
           );

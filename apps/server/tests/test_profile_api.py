@@ -104,6 +104,20 @@ def test_get_me_returns_authenticated_users_profile_and_auth_email(
     get_email.assert_called_once_with(ANY, TEST_USER_ID)
 
 
+def test_get_me_falls_back_to_empty_email_when_auth_email_is_null(
+    authenticated_client, profile_dependencies
+):
+    # 카카오 OAuth는 이메일 동의항목이 승인되지 않으면 auth.users.email이 NULL일 수 있다.
+    # 500 대신 빈 문자열로 응답해야 한다.
+    _, get_email, _ = profile_dependencies
+    get_email.return_value = None
+
+    response = authenticated_client.get("/api/v1/me", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert response.json()["data"]["email"] == ""
+
+
 def test_get_me_returns_404_when_profile_is_missing(authenticated_client, profile_dependencies):
     get_profile, get_email, _ = profile_dependencies
     get_profile.return_value = None

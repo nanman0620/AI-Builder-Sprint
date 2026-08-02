@@ -59,11 +59,9 @@ def get_bootstrap_state(db: Session, user_id: uuid.UUID, *, now: datetime) -> Bo
     이 함수 안에서 같은 SQL이나 상태 계산을 다시 만들지 않는다.
     """
     profile_row = profile_service.get_profile(db, user_id)
-    email = profile_service.get_user_email(db, user_id)
-    if email is None:
-        # FK(user_profiles.id -> auth.users.id)와 Supabase Auth가 행 존재를 보장하므로
-        # 정상 흐름에서는 발생하지 않아야 한다. 데이터 정합성 문제로 간주해 명확한 오류로 남긴다.
-        raise RuntimeError("auth.users에서 사용자 이메일을 찾을 수 없다.")
+    # 카카오 OAuth는 이메일 동의항목이 승인되지 않으면 auth.users.email이 NULL일 수 있다.
+    # bootstrap은 앱 최초 진입점이므로 이 경우에도 실패시키지 않고 빈 문자열로 대체한다.
+    email = profile_service.get_user_email(db, user_id) or ""
 
     # 온보딩 전에는 user_profiles 행 자체가 없을 수 있다(PUT /me/onboarding에서 최초 생성).
     onboarding_completed = profile_row.onboarding_completed if profile_row else False

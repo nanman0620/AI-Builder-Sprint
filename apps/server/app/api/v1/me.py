@@ -30,11 +30,9 @@ def to_profile_out(profile: UserProfile, email: str) -> ProfileOut:
 
 
 def get_required_email(db: Session, user_id: uuid.UUID) -> str:
-    email = profile_service.get_user_email(db, user_id)
-    if email is None:
-        # user_profiles.id는 auth.users.id를 참조하므로 정상 흐름에서는 발생하지 않는다.
-        raise RuntimeError("auth.users에서 사용자 이메일을 찾을 수 없다.")
-    return email
+    # 카카오 OAuth는 이메일 동의항목이 승인되지 않으면 auth.users.email이 NULL일 수 있다.
+    # bootstrap_service.get_bootstrap_state와 동일하게 빈 문자열로 대체해 요청을 실패시키지 않는다.
+    return profile_service.get_user_email(db, user_id) or ""
 
 
 def upsert_onboarding_profile(db: Session, user_id: uuid.UUID, nickname: str) -> UserProfile:
