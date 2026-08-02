@@ -92,8 +92,65 @@ function resolveScoreFeedback(score: number): string {
   return '괜찮아요, 다시 이어가면 돼요';
 }
 
-export function resolveProgressFeedback(percentage: number): string {
-  return resolveScoreFeedback(percentage);
+export const PROGRESS_FEEDBACK_MESSAGES: Record<ScoreBand, readonly string[]> = {
+  SCORE_00: [
+    '괜찮아요, 다시 이어가면 돼요',
+    '아직 늦지 않았어요, 하나부터 시작해 봐요',
+    '오늘의 첫 완료를 만들어 볼까요?',
+    '천천히 시작해도 괜찮아요',
+    '작은 한 걸음부터 이어가 봐요',
+    '지금 시작해도 충분해요',
+  ],
+  SCORE_30: [
+    '좋아요, 흐름을 만들고 있어요',
+    '첫걸음을 잘 이어가고 있어요',
+    '조금씩 오늘의 계획이 채워지고 있어요',
+    '좋은 시작이에요, 다음 계획도 이어가 봐요',
+    '차근차근 오늘의 흐름을 만들어가고 있어요',
+    '벌써 멋진 시작을 해냈어요',
+  ],
+  SCORE_60: [
+    '잘하고 있어요, 이 흐름 그대로!',
+    '오늘 계획을 멋지게 이어가고 있어요',
+    '거의 다 왔어요, 조금만 더 이어가 봐요!',
+    '나만의 속도로 차근차근 해내고 있어요',
+    '오늘의 계획이 멋지게 채워지고 있어요',
+    '지금의 흐름이면 충분히 해낼 수 있어요',
+  ],
+  SCORE_100: [
+    '오늘 계획을 모두 이어냈어요!',
+    '오늘 할 일을 멋지게 다 해냈어요!',
+    '완벽해요, 오늘의 계획을 전부 완료했어요',
+    '오늘의 이음이도 정말 행복해 보여요!',
+    '오늘 계획을 끝까지 멋지게 이어냈어요',
+    '해냈어요! 오늘의 모든 계획을 완료했어요',
+  ],
+};
+
+export function stableHash(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+export function resolveProgressFeedback(input: {
+  percentage: number;
+  logicalDate: string;
+  currentPeriod: PlanPeriod;
+  completedPlanCount: number;
+  totalPlanCount: number;
+}): string {
+  const messages = PROGRESS_FEEDBACK_MESSAGES[resolveScoreBand(input.percentage)];
+  const seed = [
+    input.logicalDate,
+    input.currentPeriod,
+    input.completedPlanCount,
+    input.totalPlanCount,
+  ].join('|');
+  return messages[stableHash(seed) % messages.length];
 }
 
 export function resolveCheckInFeedback(score: number, cycleEnded: boolean): string {

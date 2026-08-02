@@ -142,10 +142,13 @@ export function HomeScreen() {
           style={styles.emptyStateScroll}
           contentContainerStyle={styles.emptyStateContent}
           bounces={false}>
-          <View style={styles.emptyStateBody}>
+          <View style={styles.noPlansBody}>
             <HomeMascot mascotKey={resolveHomeMascotKey('NO_PLANS')} style={styles.centerMascot} />
             <Text style={styles.bodyHeadline}>지금 시간대에는 예정된 계획이 없어요.</Text>
             <Text style={styles.bodyDescription}>잠시 쉬어가도 괜찮아요.</Text>
+            <Pressable style={styles.outlineButton} onPress={() => router.push('/(tabs)/plan-management')}>
+              <Text style={styles.outlineButtonText}>계획관리에서 등록하기</Text>
+            </Pressable>
           </View>
         </ScrollView>
       </View>
@@ -156,8 +159,14 @@ export function HomeScreen() {
   const planBlocks = sortPlanBlocksByDisplayOrder(data.planBlocks);
   const periodLabel = formatPeriodLabel(data.period);
   const progressFeedback = data.progress
-    ? resolveProgressFeedback(data.progress.percentage)
-    : '나만의 속도로 잘 가고 있어요!';
+    ? resolveProgressFeedback({
+        percentage: data.progress.percentage,
+        logicalDate: data.logicalDate,
+        currentPeriod: data.period,
+        completedPlanCount: data.progress.checkedCount,
+        totalPlanCount: data.progress.totalCount,
+      })
+    : '괜찮아요, 다시 이어가면 돼요';
 
   return (
     <View style={styles.screen}>
@@ -272,6 +281,12 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  noPlansBody: {
+    flexGrow: 1,
+    alignItems: 'center',
+    paddingTop: spacing.sm,
+    gap: spacing.sm,
   },
   centerMascot: {
     alignSelf: 'center',

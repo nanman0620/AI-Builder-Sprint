@@ -9,6 +9,7 @@ import {
   formatLogicalDateBadge,
   formatPeriodLabel,
   PlanBlockPendingRegistry,
+  PROGRESS_FEEDBACK_MESSAGES,
   replacePlanBlock,
   resolveCheckInFeedback,
   resolveHomeMascotKey,
@@ -112,15 +113,58 @@ test('CheckIn 결과 문구가 점수 구간 경계마다 정확히 바뀐다', 
   assert.equal(resolveCheckInFeedback(101, false), '오늘 계획을 모두 이어냈어요!');
 });
 
-test('IN_PROGRESS 문구가 현재 percentage의 점수 구간을 따른다', () => {
-  assert.equal(resolveProgressFeedback(0), '괜찮아요, 다시 이어가면 돼요');
-  assert.equal(resolveProgressFeedback(29), '괜찮아요, 다시 이어가면 돼요');
-  assert.equal(resolveProgressFeedback(30), '좋아요, 흐름을 만들고 있어요');
-  assert.equal(resolveProgressFeedback(59), '좋아요, 흐름을 만들고 있어요');
-  assert.equal(resolveProgressFeedback(60), '잘하고 있어요, 이 흐름 그대로!');
-  assert.equal(resolveProgressFeedback(99), '잘하고 있어요, 이 흐름 그대로!');
-  assert.equal(resolveProgressFeedback(100), '오늘 계획을 모두 이어냈어요!');
-  assert.equal(resolveProgressFeedback(120), '오늘 계획을 모두 이어냈어요!');
+test('IN_PROGRESS 후보는 구간마다 blank와 중복 없이 정확히 6개다', () => {
+  for (const messages of Object.values(PROGRESS_FEEDBACK_MESSAGES)) {
+    assert.equal(messages.length, 6);
+    assert.equal(new Set(messages).size, 6);
+    assert.equal(messages.every((message) => message.trim().length > 0), true);
+  }
+});
+
+test('IN_PROGRESS 문구가 percentage 경계의 올바른 후보 구간을 따른다', () => {
+  const cases = [
+    [0, 'SCORE_00'], [29, 'SCORE_00'], [30, 'SCORE_30'], [59, 'SCORE_30'],
+    [60, 'SCORE_60'], [99, 'SCORE_60'], [100, 'SCORE_100'], [120, 'SCORE_100'],
+  ] as const;
+  for (const [percentage, band] of cases) {
+    const message = resolveProgressFeedback({
+      percentage,
+      logicalDate: '2026-08-02',
+      currentPeriod: 'AFTERNOON',
+      completedPlanCount: 2,
+      totalPlanCount: 4,
+    });
+    assert.equal(PROGRESS_FEEDBACK_MESSAGES[band].includes(message), true);
+  }
+});
+
+test('IN_PROGRESS 문구 선택은 동일 상태에서 결정적이고 체크 상태 변경 후에도 해당 구간 후보다', () => {
+  const input = {
+    percentage: 50,
+    logicalDate: '2026-08-02',
+    currentPeriod: 'AFTERNOON' as const,
+    completedPlanCount: 2,
+    totalPlanCount: 4,
+  };
+  const first = resolveProgressFeedback(input);
+  assert.equal(resolveProgressFeedback(input), first);
+  assert.equal(resolveProgressFeedback(input), first);
+
+  const changed = resolveProgressFeedback({ ...input, completedPlanCount: 3 });
+  assert.equal(PROGRESS_FEEDBACK_MESSAGES.SCORE_30.includes(changed), true);
+});
+
+test('IN_PROGRESS 경계 전환 시 이전 구간 후보가 남지 않는다', () => {
+  const resolve = (percentage: number) => resolveProgressFeedback({
+    percentage,
+    logicalDate: '2026-08-02',
+    currentPeriod: 'EVENING',
+    completedPlanCount: percentage,
+    totalPlanCount: 100,
+  });
+  assert.equal(PROGRESS_FEEDBACK_MESSAGES.SCORE_30.includes(resolve(30)), true);
+  assert.equal(PROGRESS_FEEDBACK_MESSAGES.SCORE_60.includes(resolve(60)), true);
+  assert.equal(PROGRESS_FEEDBACK_MESSAGES.SCORE_100.includes(resolve(100)), true);
 });
 
 test('cycle이 끝나면 점수와 관계없이 7일 계획 종료 문구가 우선한다', () => {
