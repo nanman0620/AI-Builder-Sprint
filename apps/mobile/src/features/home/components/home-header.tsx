@@ -13,6 +13,7 @@ type HomeHeaderProps = {
   badgeLabel?: string;
   nickname?: string | null;
   title: string;
+  feedback?: string;
   description?: string;
 };
 
@@ -30,7 +31,7 @@ export function HomeDateBadge({ logicalDate }: HomeDateBadgeProps) {
 
 // UI-005~UI-009 공통 상단 영역: 날짜 배지(+선택적 경고 배지) → 제목 → 선택적 설명.
 // FINALIZING(UI-010)은 이 헤더를 쓰지 않는 완전히 다른 전체화면 레이아웃이라 별도 컴포넌트(FinalizingView)로 둔다.
-export function HomeHeader({ logicalDate, badgeLabel, nickname, title, description }: HomeHeaderProps) {
+export function HomeHeader({ logicalDate, badgeLabel, nickname, title, feedback, description }: HomeHeaderProps) {
   const trimmedNickname = nickname?.trim();
   const greeting = nickname !== undefined ? (trimmedNickname ? `${trimmedNickname}님,` : '안녕하세요,') : null;
   const [headerContentHeight, setHeaderContentHeight] = useState(0);
@@ -59,6 +60,22 @@ export function HomeHeader({ logicalDate, badgeLabel, nickname, title, descripti
             {greeting ? `${greeting}\n` : ''}
             {title}
           </Text>
+          {feedback ? (
+            <Text
+              adjustsFontSizeToFit
+              minimumFontScale={0.65}
+              numberOfLines={1}
+              style={[
+                styles.feedback,
+                feedback.length > 28
+                  ? styles.feedbackTight
+                  : feedback.length > 22
+                    ? styles.feedbackCompact
+                    : null,
+              ]}>
+              {feedback}
+            </Text>
+          ) : null}
           {description ? <Text style={styles.description}>{description}</Text> : null}
         </View>
         <Pressable
@@ -96,9 +113,11 @@ const styles = StyleSheet.create({
   headerRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
+    position: 'relative',
   },
   headerContent: {
     flex: 1,
+    minWidth: 0,
   },
   badgeRow: {
     flexDirection: 'row',
@@ -135,15 +154,27 @@ const styles = StyleSheet.create({
     fontSize: 17,
     marginLeft: 8,
   },
+  feedback: {
+    ...typography.title,
+    color: colors.text,
+    fontSize: 17,
+    marginLeft: 8,
+  },
+  feedbackCompact: {
+    fontSize: 14,
+  },
+  feedbackTight: {
+    fontSize: 12,
+  },
   description: {
     ...typography.body,
     color: colors.textSecondary,
     marginTop: spacing.xs,
   },
   shopButton: {
-    marginLeft: spacing.md - 30 ,
-    marginRight: -30, 
-    marginTop: 6,
+    position: 'absolute',
+    right: -30,
+    top: 6,
   },
   shopIcon: {
     height: 1,

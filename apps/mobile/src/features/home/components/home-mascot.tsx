@@ -66,8 +66,10 @@ function MascotStage({
           <RadialGradient id="mascotGlow" cx="50%" cy="50%" rx="50%" ry="50%">
             <Stop offset="0%" stopColor={colors.primary} stopOpacity={0.42} />
             <Stop offset="52%" stopColor={colors.primary} stopOpacity={0.26} />
-            <Stop offset="78%" stopColor={colors.primary} stopOpacity={0.13} />
-            <Stop offset="100%" stopColor={colors.primary} stopOpacity={0.03} />
+            <Stop offset="72%" stopColor={colors.primary} stopOpacity={0.14} />
+            <Stop offset="86%" stopColor={colors.primary} stopOpacity={0.06} />
+            <Stop offset="95%" stopColor={colors.primary} stopOpacity={0.018} />
+            <Stop offset="100%" stopColor={colors.primary} stopOpacity={0} />
           </RadialGradient>
         </Defs>
         <Circle cx={145} cy={145} r={145} fill="url(#mascotGlow)" />
