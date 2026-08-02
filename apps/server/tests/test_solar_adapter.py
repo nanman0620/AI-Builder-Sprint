@@ -125,6 +125,84 @@ def test_clear_task_recurrence_guard_false_positives(text):
     assert solar_client.has_clear_task_recurrence_intent(text) is False
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("토요일에 알바", (5,)),
+        ("이번 토요일 오전 10시", (5,)),
+        ("토요일 오전 10시부터 오후 4시", (5,)),
+        ("토요일이라는 단어를 수정", ()),
+        ("“토요일” 문장 교정", ()),
+        ("토요일반 수업", ()),
+        ("토요일과 일요일에 알바", (5, 6)),
+    ],
+)
+def test_extract_explicit_korean_weekdays(text, expected):
+    assert solar_client.extract_explicit_korean_weekdays(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "absolute_date", "week_relation", "time_range", "recurring", "ambiguous"),
+    [
+        ("8월 15일 토요일 10시부터 16시까지", True, None, True, False, False),
+        ("다음 주 토요일 10시부터 16시까지", False, "NEXT_WEEK", True, False, False),
+        ("이번 토요일 10시부터 16시까지", False, "THIS_WEEK", True, False, False),
+        ("매주 토요일 10시부터 16시까지", False, None, True, True, False),
+        ("토요일마다 10시부터 16시까지", False, None, True, True, False),
+        ("주말에 알바", False, None, False, False, True),
+    ],
+)
+def test_fixed_schedule_relative_date_signal_helpers(
+    text, absolute_date, week_relation, time_range, recurring, ambiguous
+):
+    assert solar_client.has_explicit_absolute_date(text) is absolute_date
+    assert solar_client.extract_explicit_week_relation(text) == week_relation
+    assert solar_client.has_explicit_time_range(text) is time_range
+    assert solar_client.has_clear_fixed_schedule_recurrence_intent(text) is recurring
+    assert solar_client.has_ambiguous_weekday_expression(text) is ambiguous
+
+
+def test_fixed_schedule_local_clause_excludes_other_task_absolute_date():
+    text = (
+        "8월 7일까지 운영체제 과제 2문제 해야 하고, "
+        "토요일 오전 10시부터 오후 4시까지 알바 있어"
+    )
+
+    clause = solar_client.extract_fixed_schedule_local_clause(text, title="알바")
+
+    assert clause == "토요일 오전 10시부터 오후 4시까지 알바 있어"
+    assert solar_client.extract_explicit_absolute_dates(text) == ("8월 7일",)
+    assert solar_client.extract_explicit_absolute_dates(clause) == ()
+    assert solar_client.extract_explicit_korean_weekdays(clause) == (5,)
+    assert solar_client.extract_explicit_korean_time_range(clause) == (
+        datetime.strptime("10:00", "%H:%M").time(),
+        datetime.strptime("16:00", "%H:%M").time(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("오전 10시부터 오후 4시까지", ("10:00", "16:00")),
+        ("오전 10시 ~ 오후 4시", ("10:00", "16:00")),
+        ("오전 10시에서 오후 4시", ("10:00", "16:00")),
+        ("10시부터 16시까지", ("10:00", "16:00")),
+        ("오전 12시부터 오후 12시까지", ("00:00", "12:00")),
+        ("오전 10시부터 4시까지", None),
+    ],
+)
+def test_extract_explicit_korean_time_range_am_pm_and_noon(text, expected):
+    result = solar_client.extract_explicit_korean_time_range(text)
+    if expected is None:
+        assert result is None
+    else:
+        assert result is not None
+        assert tuple(value.strftime("%H:%M") for value in result) == expected
+    assert solar_client.has_ambiguous_korean_time_range(text) is (
+        text == "오전 10시부터 4시까지"
+    )
+
+
 def test_parse_create_missing_fields_and_pending_question_cross_check():
     item_raw = _task_create_item(
         deadlineAt=None, estimatedMinutes=None, estimatedMinutesSource=None, amountText=None, amountSource=None
