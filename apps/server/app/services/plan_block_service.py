@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.errors import ApiError
-from app.models.enums import PlanBlockStatus, PlanCycleStatus, PlanPeriod, TaskStatus
+from app.models.enums import AmountSource, PlanBlockStatus, PlanCycleStatus, PlanPeriod, TaskStatus
 from app.models.fixed_schedule import FixedSchedule
 from app.models.plan_block import PlanBlock
 from app.models.planning_cycle import PlanningCycle
@@ -771,6 +771,54 @@ def _distribute_daily_quotas(effective_need: int, eligible_dates: list[date]) ->
     return quotas
 
 
+def _select_evenly_spaced_target_dates(
+    eligible_dates: list[date], target_date_count: int
+) -> list[date]:
+    """Select deterministic, increasing dates spread across the planning horizon."""
+    if target_date_count <= 0 or not eligible_dates:
+        return []
+    bounded_count = min(target_date_count, len(eligible_dates))
+    selected = [
+        eligible_dates[(order * len(eligible_dates)) // bounded_count]
+        for order in range(bounded_count)
+    ]
+    assert len(selected) == len(set(selected)) == bounded_count
+    return selected
+
+
+def _build_task_daily_quotas(
+    *,
+    task: Task,
+    effective_need: int,
+    eligible_dates: list[date],
+    has_completed_amount_history: bool,
+) -> dict[date, int]:
+    """Build base quotas and optional forward-only capacity expansion dates.
+
+    A canonical positive integer amount limits the base dates. Dates after the last
+    base target receive zero quota so they open only when forward carry remains.
+    """
+    if effective_need <= 0 or not eligible_dates:
+        return {}
+    parsed_amount = (
+        _parse_amount_quantity(task.amount_text)
+        if task.amount_text is not None and task.amount_source != AmountSource.UNKNOWN
+        else None
+    )
+    if parsed_amount is None or has_completed_amount_history:
+        return _distribute_daily_quotas(effective_need, eligible_dates)
+
+    quantity, _unit = parsed_amount
+    target_dates = _select_evenly_spaced_target_dates(
+        eligible_dates, min(quantity, len(eligible_dates))
+    )
+    quotas = _distribute_daily_quotas(effective_need, target_dates)
+    last_target_index = eligible_dates.index(target_dates[-1])
+    for expansion_date in eligible_dates[last_target_index + 1:]:
+        quotas[expansion_date] = 0
+    return quotas
+
+
 def schedule_plan_blocks(
     db: Session,
     *,
@@ -853,6 +901,21 @@ def schedule_plan_blocks(
 
     ordered_tasks = sorted(tasks, key=lambda task: _task_priority_key(task, cycle_end_at))
 
+    task_ids = {task.id for task in tasks}
+    tasks_with_checked_or_completed_history: set[uuid.UUID] = set()
+    if task_ids:
+        history_blocks = (
+            db.execute(
+                select(PlanBlock).where(
+                    PlanBlock.task_id.in_(task_ids),
+                    PlanBlock.status.in_([PlanBlockStatus.CHECKED, PlanBlockStatus.COMPLETED]),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        tasks_with_checked_or_completed_history = {block.task_id for block in history_blocks}
+
     periods_by_date: dict[date, list[PlanPeriod]] = {}
     for plan_date, period in _iter_periods_from(current_plan_date, current_period, cycle.end_date):
         periods_by_date.setdefault(plan_date, []).append(period)
@@ -905,8 +968,11 @@ def schedule_plan_blocks(
                 )
             if raw_date_capacity > 0:
                 eligible_dates.append(plan_date)
-        daily_quotas_by_task[task.id] = _distribute_daily_quotas(
-            remaining_needs.get(task.id, 0), eligible_dates
+        daily_quotas_by_task[task.id] = _build_task_daily_quotas(
+            task=task,
+            effective_need=remaining_needs.get(task.id, 0),
+            eligible_dates=eligible_dates,
+            has_completed_amount_history=task.id in tasks_with_checked_or_completed_history,
         )
 
     # 3. 날짜별 quota와 순방향 carry를 지키며, 날짜 안에서는 기존 period/task 순서로 배치
@@ -1025,21 +1091,6 @@ def schedule_plan_blocks(
     # 4. 분량 배분 fallback: CHECKED/COMPLETED 이력이 있는 Task는 amount_text가 이미
     #    "Task 전체 분량"을 가리키지 않게 되므로(그 중 얼마가 끝났는지 계산할 구조가 없음)
     #    이번 신규 블록에서 제외한다. NOT_DONE은 완료된 적이 없으므로 이력에 포함하지 않는다.
-    candidate_task_ids = {block.task_id for block in created_blocks}
-    tasks_with_checked_or_completed_history: set[uuid.UUID] = set()
-    if candidate_task_ids:
-        history_blocks = (
-            db.execute(
-                select(PlanBlock).where(
-                    PlanBlock.task_id.in_(candidate_task_ids),
-                    PlanBlock.status.in_([PlanBlockStatus.CHECKED, PlanBlockStatus.COMPLETED]),
-                )
-            )
-            .scalars()
-            .all()
-        )
-        tasks_with_checked_or_completed_history = {block.task_id for block in history_blocks}
-
     tasks_by_id = {task.id: task for task in tasks}
     _apply_amount_distribution_fallback(
         created_blocks,
