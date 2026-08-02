@@ -1,4 +1,8 @@
-import { Image, StyleSheet, type ImageSourcePropType, type ImageStyle, type StyleProp } from 'react-native';
+import type { ReactNode } from 'react';
+import { Image, StyleSheet, View, type ImageSourcePropType, type StyleProp, type ViewStyle } from 'react-native';
+import Svg, { Circle, Defs, RadialGradient, Stop } from 'react-native-svg';
+
+import { colors } from '@/src/constants/tokens';
 
 import type { HomeMascotKey, ScoreBand } from '../logic';
 
@@ -20,24 +24,70 @@ const SCORE_MASCOT_SOURCES: Record<ScoreBand, ImageSourcePropType> = {
 type HomeMascotProps = {
   mascotKey: HomeMascotKey;
   size?: number;
-  style?: StyleProp<ImageStyle>;
+  style?: StyleProp<ViewStyle>;
 };
 
 export function HomeMascot({ mascotKey, size = 160, style }: HomeMascotProps) {
-  return <Image source={MASCOT_SOURCES[mascotKey]} style={[{ width: size, height: size }, style]} resizeMode="contain" />;
+  return (
+    <MascotStage contentSize={size} style={style}>
+      <Image source={MASCOT_SOURCES[mascotKey]} style={{ width: size, height: size }} resizeMode="contain" />
+    </MascotStage>
+  );
 }
 
 type ScoreMascotProps = {
   scoreBand: ScoreBand;
-  style?: StyleProp<ImageStyle>;
+  style?: StyleProp<ViewStyle>;
 };
 
 // UI_REFERENCE.md "CHECK_IN_RESULT 마스코트 배치 규칙": 표시 영역 128x128 고정, contain 유지.
 export function ScoreMascot({ scoreBand, style }: ScoreMascotProps) {
-  return <Image source={SCORE_MASCOT_SOURCES[scoreBand]} style={[styles.scoreMascot, style]} resizeMode="contain" />;
+  return (
+    <MascotStage contentSize={210} style={style}>
+      <Image source={SCORE_MASCOT_SOURCES[scoreBand]} style={styles.scoreMascot} resizeMode="contain" />
+    </MascotStage>
+  );
+}
+
+function MascotStage({
+  children,
+  contentSize,
+  style,
+}: {
+  children: ReactNode;
+  contentSize: number;
+  style?: StyleProp<ViewStyle>;
+}) {
+  const stageSize = Math.max(290, contentSize);
+  return (
+    <View style={[styles.stage, { width: stageSize, height: stageSize }, style]}>
+      <Svg pointerEvents="none" width={290} height={290} style={styles.backdrop}>
+        <Defs>
+          <RadialGradient id="mascotGlow" cx="50%" cy="50%" rx="50%" ry="50%">
+            <Stop offset="0%" stopColor={colors.primary} stopOpacity={0.42} />
+            <Stop offset="52%" stopColor={colors.primary} stopOpacity={0.26} />
+            <Stop offset="78%" stopColor={colors.primary} stopOpacity={0.13} />
+            <Stop offset="100%" stopColor={colors.primary} stopOpacity={0.03} />
+          </RadialGradient>
+        </Defs>
+        <Circle cx={145} cy={145} r={145} fill="url(#mascotGlow)" />
+      </Svg>
+      {children}
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
+  stage: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible',
+  },
+  backdrop: {
+    position: 'absolute',
+    width: 290,
+    height: 290,
+  },
   scoreMascot: {
     width: 210,
     height: 210,

@@ -4,7 +4,7 @@ import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { ErrorView } from '@/src/components/common/error-view';
 import { LoadingView } from '@/src/components/common/loading-view';
 import { CircularGauge } from '@/src/components/CircularGauge';
-import { colors, fonts, spacing, typography } from '@/src/constants/tokens';
+import { colors, fonts, planBlockVisuals, spacing, typography } from '@/src/constants/tokens';
 
 import { useCalendar } from '../hooks/use-calendar';
 import {
@@ -278,7 +278,7 @@ const styles = StyleSheet.create({
   },
   dayNumberCircleSelected: { backgroundColor: colors.primary },
   dayNumber: { ...typography.body, color: colors.text },
-  dayNumberSelected: { color: colors.background, fontFamily: fonts.bold },
+  dayNumberSelected: { color: colors.background },
   dayDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.primary, marginTop: 2 },
   detail: { marginTop: spacing.lg },
   detailHeader: {
@@ -321,25 +321,31 @@ const styles = StyleSheet.create({
   scheduleTime: { ...typography.body, color: colors.textSecondary },
   planRow: {
     minHeight: 50,
-    borderWidth: 1,
-    borderColor: colors.textSecondary,
-    borderRadius: 14,
+    borderWidth: planBlockVisuals.borderWidth,
+    borderColor: planBlockVisuals.borderColor,
+    borderRadius: planBlockVisuals.borderRadius,
     paddingHorizontal: spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
   },
-  planRowCompleted: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
+  planRowCompleted: {
+    borderColor: planBlockVisuals.checkedBorderColor,
+    backgroundColor: planBlockVisuals.checkedBackgroundColor,
+  },
   statusCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    borderWidth: 2,
-    borderColor: colors.textSecondary,
+    width: planBlockVisuals.checkSize,
+    height: planBlockVisuals.checkSize,
+    borderRadius: planBlockVisuals.checkSize / 2,
+    borderWidth: planBlockVisuals.checkBorderWidth,
+    borderColor: planBlockVisuals.borderColor,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  statusCircleCompleted: { borderColor: colors.primary, backgroundColor: colors.primary },
+  statusCircleCompleted: {
+    borderColor: planBlockVisuals.checkedBorderColor,
+    backgroundColor: planBlockVisuals.checkedBorderColor,
+  },
   planTitle: { ...typography.body, color: colors.text, flex: 1 },
   empty: { minHeight: 260, alignItems: 'center', justifyContent: 'center' },
   emptyMascot: { width: 160, height: 160, marginBottom: spacing.md -30, marginTop: spacing.md -90 },

@@ -17,7 +17,7 @@ import { PlanBlockRow } from '../components/plan-block-row';
 import { ProgressBar } from '../components/progress-bar';
 import { useHideTabBar } from '../hooks/use-hide-tab-bar';
 import { useHome } from '../hooks/use-home';
-import { formatPeriodLabel, resolveCheckInFeedback, resolveHomeMascotKey, resolveProgressMascotBand, resolveScoreBand, resolveVisibleHomeState, shouldHideTabBar, sortPlanBlocksByDisplayOrder } from '../logic';
+import { formatPeriodLabel, resolveCheckInFeedback, resolveHomeMascotKey, resolveProgressFeedback, resolveProgressMascotBand, resolveScoreBand, resolveVisibleHomeState, shouldHideTabBar, sortPlanBlocksByDisplayOrder } from '../logic';
 import type { CheckInResult } from '../types';
 
 export function HomeScreen() {
@@ -107,8 +107,11 @@ export function HomeScreen() {
           nickname={nickname}
           title="오늘의 계획을 함께 세워볼까요?"
         />
-        <View style={styles.emptyStateGroup}>
-          <View style={styles.centerBody}>
+        <ScrollView
+          style={styles.emptyStateScroll}
+          contentContainerStyle={styles.emptyStateContent}
+          bounces={false}>
+          <View style={styles.emptyStateBody}>
             <HomeMascot
               mascotKey={resolveHomeMascotKey('NO_ACTIVE_CYCLE')}
               size={290}
@@ -118,11 +121,11 @@ export function HomeScreen() {
             <Text style={styles.bodyDescription}>
               이음이에게 앞으로 7일의 할 일을 알려주고,{'\n'}오늘의 일정을 시작해 보세요.
             </Text>
+            <Pressable style={styles.outlineButton} onPress={() => router.push('/(tabs)/plan-management')}>
+              <Text style={styles.outlineButtonText}>계획관리에서 등록하기</Text>
+            </Pressable>
           </View>
-          <Pressable style={styles.outlineButton} onPress={() => router.push('/(tabs)/plan-management')}>
-            <Text style={styles.outlineButtonText}>계획관리에서 등록하기</Text>
-          </Pressable>
-        </View>
+        </ScrollView>
       </View>
     );
   }
@@ -135,11 +138,16 @@ export function HomeScreen() {
           nickname={nickname}
           title="발길 닿는 대로, 오늘을 즐겨봐요!"
         />
-        <View style={styles.centerBody}>
-          <HomeMascot mascotKey={resolveHomeMascotKey('NO_PLANS')} style={styles.centerMascot} />
-          <Text style={styles.bodyHeadline}>지금 시간대에는 예정된 계획이 없어요.</Text>
-          <Text style={styles.bodyDescription}>잠시 쉬어가도 괜찮아요.</Text>
-        </View>
+        <ScrollView
+          style={styles.emptyStateScroll}
+          contentContainerStyle={styles.emptyStateContent}
+          bounces={false}>
+          <View style={styles.emptyStateBody}>
+            <HomeMascot mascotKey={resolveHomeMascotKey('NO_PLANS')} style={styles.centerMascot} />
+            <Text style={styles.bodyHeadline}>지금 시간대에는 예정된 계획이 없어요.</Text>
+            <Text style={styles.bodyDescription}>잠시 쉬어가도 괜찮아요.</Text>
+          </View>
+        </ScrollView>
       </View>
     );
   }
@@ -147,6 +155,9 @@ export function HomeScreen() {
   // IN_PROGRESS: 현재 서버 응답의 planBlocks만 표시하고 displayOrder로 정렬한다(§11).
   const planBlocks = sortPlanBlocksByDisplayOrder(data.planBlocks);
   const periodLabel = formatPeriodLabel(data.period);
+  const progressFeedback = data.progress
+    ? resolveProgressFeedback(data.progress.percentage)
+    : '나만의 속도로 잘 가고 있어요!';
 
   return (
     <View style={styles.screen}>
@@ -154,8 +165,8 @@ export function HomeScreen() {
         logicalDate={data.logicalDate}
         title={
           nickname
-            ? `${nickname}님의 ${periodLabel} 할 일\n나만의 속도로 잘 가고 있어요!`
-            : `안녕하세요,\n${periodLabel} 할 일도 나만의 속도로 잘 가고 있어요!`
+            ? `${nickname}님의 ${periodLabel} 할 일\n${progressFeedback}`
+            : `안녕하세요,\n${periodLabel} 할 일도 ${progressFeedback}`
         }
       />
       {data.progress ? <ProgressBar percentage={data.progress.percentage} /> : null}
@@ -202,7 +213,10 @@ function CheckInResultBody({
   const resultPlans = [...result.completedPlans, ...result.notDonePlans];
 
   return (
-    <View style={styles.screen}>
+    <ScrollView
+      style={styles.screen}
+      contentContainerStyle={styles.resultContent}
+      bounces={false}>
       <View style={styles.resultHeaderRow}>
         <View style={styles.resultHeaderText}>
           <View style={styles.resultDateBadge}>
@@ -236,7 +250,7 @@ function CheckInResultBody({
         style={[styles.filledButton, isSubmitting && styles.buttonDisabled]}>
         <Text style={styles.filledButtonText}>{periodLabel} 계획 보기</Text>
       </Pressable>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -245,21 +259,23 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
-  centerBody: {
+  emptyStateScroll: {
     flex: 1,
+  },
+  emptyStateContent: {
+    flexGrow: 1,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.xl * 2,
+    paddingBottom: spacing.xl,
+  },
+  emptyStateBody: {
+    flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: spacing.lg,
-  },
-  emptyStateGroup: {
-    flex: 1,
-    transform: [{ translateY: -24 }],
   },
   centerMascot: {
     alignSelf: 'center',
-    marginVertical: -40,
-    marginTop: 20,
-    marginBottom: 20,
+    marginBottom: 0,
   },
   bodyHeadline: {
     ...typography.title,
@@ -277,6 +293,7 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bold,
     color: colors.text,
     paddingHorizontal: spacing.lg,
+    marginTop: -30,
     marginBottom: spacing.sm + 10,
   },
   list: {
@@ -291,10 +308,11 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderRadius: 12,
     paddingVertical: spacing.md,
-    marginHorizontal: spacing.lg,
-    marginTop: -80,
-    marginBottom: 190,
+    minHeight: 52,
+    alignSelf: 'stretch',
+    marginTop: spacing.md,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   outlineButtonText: {
     ...typography.body,
@@ -330,6 +348,10 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.lg,
+  },
+  resultContent: {
+    flexGrow: 1,
+    paddingBottom: spacing.lg,
   },
   resultHeaderText: {
     flex: 1,

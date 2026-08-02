@@ -12,6 +12,7 @@ import {
   replacePlanBlock,
   resolveCheckInFeedback,
   resolveHomeMascotKey,
+  resolveProgressFeedback,
   resolveProgressMascotBand,
   resolveScoreBand,
   resolveVisibleHomeState,
@@ -101,13 +102,25 @@ test('점수 구간 경계값이 정확히 나뉜다', () => {
 });
 
 test('CheckIn 결과 문구가 점수 구간 경계마다 정확히 바뀐다', () => {
-  assert.equal(resolveCheckInFeedback(0, false), '0점, 괜찮아요\n다음 계획부터 다시 이으면 돼요');
-  assert.equal(resolveCheckInFeedback(29, false), '29점, 괜찮아요\n다음 계획부터 다시 이으면 돼요');
-  assert.equal(resolveCheckInFeedback(30, false), '30점, 작지만 분명하게 이어왔어요');
-  assert.equal(resolveCheckInFeedback(59, false), '59점, 작지만 분명하게 이어왔어요');
-  assert.equal(resolveCheckInFeedback(60, false), '60점, 충분히 잘 이어왔어요');
-  assert.equal(resolveCheckInFeedback(99, false), '99점, 충분히 잘 이어왔어요');
-  assert.equal(resolveCheckInFeedback(100, false), '100점, 오늘의 계획을 모두 이어냈어요!');
+  assert.equal(resolveCheckInFeedback(0, false), '괜찮아요, 다시 이어가면 돼요');
+  assert.equal(resolveCheckInFeedback(29, false), '괜찮아요, 다시 이어가면 돼요');
+  assert.equal(resolveCheckInFeedback(30, false), '좋아요, 흐름을 만들고 있어요');
+  assert.equal(resolveCheckInFeedback(59, false), '좋아요, 흐름을 만들고 있어요');
+  assert.equal(resolveCheckInFeedback(60, false), '잘하고 있어요, 이 흐름 그대로!');
+  assert.equal(resolveCheckInFeedback(99, false), '잘하고 있어요, 이 흐름 그대로!');
+  assert.equal(resolveCheckInFeedback(100, false), '오늘 계획을 모두 이어냈어요!');
+  assert.equal(resolveCheckInFeedback(101, false), '오늘 계획을 모두 이어냈어요!');
+});
+
+test('IN_PROGRESS 문구가 현재 percentage의 점수 구간을 따른다', () => {
+  assert.equal(resolveProgressFeedback(0), '괜찮아요, 다시 이어가면 돼요');
+  assert.equal(resolveProgressFeedback(29), '괜찮아요, 다시 이어가면 돼요');
+  assert.equal(resolveProgressFeedback(30), '좋아요, 흐름을 만들고 있어요');
+  assert.equal(resolveProgressFeedback(59), '좋아요, 흐름을 만들고 있어요');
+  assert.equal(resolveProgressFeedback(60), '잘하고 있어요, 이 흐름 그대로!');
+  assert.equal(resolveProgressFeedback(99), '잘하고 있어요, 이 흐름 그대로!');
+  assert.equal(resolveProgressFeedback(100), '오늘 계획을 모두 이어냈어요!');
+  assert.equal(resolveProgressFeedback(120), '오늘 계획을 모두 이어냈어요!');
 });
 
 test('cycle이 끝나면 점수와 관계없이 7일 계획 종료 문구가 우선한다', () => {

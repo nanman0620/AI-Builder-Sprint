@@ -20,3 +20,14 @@ export const colors = {
   // 마감 임박(DEADLINE_WARNING) 배지·카드에서 반복되는 주황 계열 경고색 (UI-008, UI-009)
   warning: '#F59E0B',
 } as const;
+
+// Home과 Calendar의 동일한 PlanBlock 상태가 화면마다 달라지지 않도록 공유하는 시각 계약.
+export const planBlockVisuals = {
+  borderWidth: 1,
+  borderRadius: 16,
+  borderColor: colors.border,
+  checkedBorderColor: colors.primary,
+  checkedBackgroundColor: colors.primarySoft,
+  checkSize: 24,
+  checkBorderWidth: 1.5,
+} as const;

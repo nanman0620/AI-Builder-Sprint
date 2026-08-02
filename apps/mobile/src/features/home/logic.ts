@@ -77,23 +77,31 @@ export function resolveScoreBand(score: number): ScoreBand {
   return 'SCORE_00';
 }
 
+function resolveScoreFeedback(score: number): string {
+  const scoreBand = resolveScoreBand(score);
+
+  if (scoreBand === 'SCORE_100') {
+    return '오늘 계획을 모두 이어냈어요!';
+  }
+  if (scoreBand === 'SCORE_60') {
+    return '잘하고 있어요, 이 흐름 그대로!';
+  }
+  if (scoreBand === 'SCORE_30') {
+    return '좋아요, 흐름을 만들고 있어요';
+  }
+  return '괜찮아요, 다시 이어가면 돼요';
+}
+
+export function resolveProgressFeedback(percentage: number): string {
+  return resolveScoreFeedback(percentage);
+}
+
 export function resolveCheckInFeedback(score: number, cycleEnded: boolean): string {
   if (cycleEnded) {
     return '7일의 계획이 모두 끝났어요';
   }
 
-  const scoreBand = resolveScoreBand(score);
-
-  if (scoreBand === 'SCORE_100') {
-    return `${score}점, 오늘의 계획을 모두 이어냈어요!`;
-  }
-  if (scoreBand === 'SCORE_60') {
-    return `${score}점, 충분히 잘 이어왔어요`;
-  }
-  if (scoreBand === 'SCORE_30') {
-    return `${score}점, 작지만 분명하게 이어왔어요`;
-  }
-  return `${score}점, 괜찮아요\n다음 계획부터 다시 이으면 돼요`;
+  return resolveScoreFeedback(score);
 }
 
 // IN_PROGRESS에서도 서버의 progress.percentage를 같은 네 개의 정적 자산 구간에 매핑한다.
