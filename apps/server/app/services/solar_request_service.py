@@ -1,4 +1,5 @@
 import logging
+import re
 import uuid
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
@@ -75,6 +76,16 @@ def _unsupported_recurrence_pending_question() -> dict:
         "message": _UNSUPPORTED_RECURRENCE_MESSAGE,
         "followUpType": _UNSUPPORTED_RECURRENCE_FOLLOW_UP,
     }
+
+
+_SIMPLE_AGREEMENT_PATTERN = re.compile(
+    r"^(?:네|넵|예|응|어|알겠어|알겠습니다|확인했어|확인했습니다|오케이|ok|okay)[.!！。]*$",
+    re.IGNORECASE,
+)
+
+
+def _is_simple_agreement(message: str) -> bool:
+    return bool(_SIMPLE_AGREEMENT_PATTERN.fullmatch(message.strip()))
 
 # CARD_ANSWER의 fieldValue(1개 필드)를 카드 normalized_payload에 patch할 때 그 필드가 실제로
 # 건드리는 payload 키 목록. CHANGE_INPUT의 CREATE+REQUEST_ITEM changedFields patch와
@@ -1872,7 +1883,9 @@ def add_solar_message(
                 card_context=call_ctx["card_context"],
             )
         elif dispatch.kind == "UNSUPPORTED_TASK_RECURRENCE":
-            if solar_client.has_clear_task_recurrence_intent(canonical_message):
+            if _is_simple_agreement(canonical_message) or solar_client.has_clear_task_recurrence_intent(
+                canonical_message
+            ):
                 result = SimpleNamespace(
                     analysis_message="반복 계획 대신 이번 7일 동안의 전체 분량과 총 예상 시간을 알려주세요.",
                     operations=[],

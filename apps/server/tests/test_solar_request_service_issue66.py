@@ -657,6 +657,29 @@ def test_resolve_message_dispatch_unsupported_task_recurrence_kind():
     assert dispatch.special_message is special
 
 
+@pytest.mark.parametrize(
+    "message",
+    ["네", "넵", "예", "응", "알겠어", "알겠습니다", "오케이", "OK", "okay!", " 확인했습니다. "],
+)
+def test_simple_recurrence_agreement_is_detected_without_task_information(message):
+    assert solar_request_service._is_simple_agreement(message) is True
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "네, 8월 8일까지 할게",
+        "알겠어. 총 140분 걸려",
+        "응 영어 단어 140개",
+        "네 매일 20개씩 할래",
+        "오케이 다음 주까지 3시간",
+        "그래도 매일 20개씩 할래",
+    ],
+)
+def test_recurrence_answer_with_task_information_is_not_simple_agreement(message):
+    assert solar_request_service._is_simple_agreement(message) is False
+
+
 def test_resolve_message_dispatch_falls_back_to_card():
     request = _make_request(status=SolarRequestStatus.COLLECTING, current_item_order=1)
     card = _make_item(
@@ -869,3 +892,77 @@ def test_add_solar_message_repair_failure_returns_503_without_partial_writes(mon
     assert db.request.status == SolarRequestStatus.CHANGE_INPUT
     assert db.commit_count == 1
     assert db.rollback_count == 0
+
+
+def test_simple_recurrence_agreement_short_circuits_solar_and_repeats_question(monkeypatch):
+    db = _TransactionTrackingDb()
+    db.request.current_item_order = 1
+    card = _make_item(
+        item_order=1,
+        action="CREATE",
+        status="INFO_MISSING",
+        normalized_payload={
+            "title": "영어 단어 암기",
+            "deadlineAt": None,
+            "estimatedMinutes": None,
+            "estimatedMinutesSource": None,
+            "remainingMinutes": None,
+            "amountText": None,
+            "amountSource": None,
+            "_unsupportedIntent": "RECURRING_TASK",
+        },
+        missing_fields=["deadlineAt", "estimatedMinutes", "amount"],
+        pending_question={
+            "field": "unsupportedRecurrence",
+            "message": solar_request_service._UNSUPPORTED_RECURRENCE_MESSAGE,
+            "followUpType": "UNSUPPORTED_TASK_RECURRENCE",
+        },
+    )
+    special = _make_message(
+        sequence_no=3,
+        role=SolarMessageRole.ASSISTANT,
+        kind=SolarMessageKind.QUESTION,
+        metadata={
+            "followUpType": "UNSUPPORTED_TASK_RECURRENCE",
+            "itemId": str(card.id),
+            "field": "unsupportedRecurrence",
+        },
+    )
+    dispatch = solar_request_service._MessageDispatch(
+        kind="UNSUPPORTED_TASK_RECURRENCE", special_message=special
+    )
+    monkeypatch.setattr(solar_request_service, "_lock_owned_solar_request", lambda *_: db.request)
+    monkeypatch.setattr(solar_request_service, "_find_message_by_client_event_id", lambda *_: None)
+    monkeypatch.setattr(solar_request_service, "_load_items", lambda *_: [card])
+    monkeypatch.setattr(solar_request_service, "_load_messages", lambda *_: [special])
+    monkeypatch.setattr(solar_request_service, "_resolve_message_dispatch", lambda *_: dispatch)
+    monkeypatch.setattr(
+        solar_request_service.solar_client,
+        "analyze_change_input",
+        lambda *args, **kwargs: pytest.fail("simple agreement must not call SOLAR"),
+    )
+    monkeypatch.setattr(
+        solar_request_service,
+        "_persist_ordered_messages",
+        lambda *args, entries, **kwargs: db.persisted_messages.extend(entries),
+    )
+    sentinel = object()
+    monkeypatch.setattr(
+        "app.services.plan_management_service.get_solar_request_detail_state",
+        lambda *args, **kwargs: sentinel,
+    )
+
+    result = _add_message(db, event_id="evt-agree", message="네")
+
+    assert result is sentinel
+    assert card.status == SolarItemStatus.INFO_MISSING
+    assert card.normalized_payload["_unsupportedIntent"] == "RECURRING_TASK"
+    assert card.missing_fields == ["deadlineAt", "estimatedMinutes", "amount"]
+    assert [entry["role"] for entry in db.persisted_messages] == [
+        SolarMessageRole.USER,
+        SolarMessageRole.ASSISTANT,
+        SolarMessageRole.ASSISTANT,
+    ]
+    questions = [entry for entry in db.persisted_messages if entry["kind"] == SolarMessageKind.QUESTION]
+    assert len(questions) == 1
+    assert questions[0]["message_metadata"]["followUpType"] == "UNSUPPORTED_TASK_RECURRENCE"
