@@ -319,7 +319,7 @@ AI-Builder-Sprint/
 6. 이메일 회원가입 또는 카카오 로그인을 진행합니다.
 7. 신규 사용자는 닉네임 온보딩을 완료한 뒤 서비스를 사용할 수 있습니다.
 
-> Android 제조사와 OS 버전에 따라 `무시하고 설치`, `세부정보`, `자세히 보기`, `설치하기` 등 버튼 이름이 다르게 표시될 수 있습니다.  
+> Android 제조사와 OS 버전에 따라 `무시하고 설치`, `세부정보`, `자세히 보기`, `설치하기` 등 버튼 이름이 다르게 표시될 수 있습니다.
 > 이 경고는 앱이 Play Store가 아닌 APK 파일로 직접 배포되기 때문에 표시됩니다.
 
 ### 첫 실행 시 서버 준비 시간
@@ -359,8 +359,7 @@ AI-Builder-Sprint/
 - Health Check: https://ieum-api-2oa0.onrender.com/api/v1/health
 - API 문서: https://ieum-api-2oa0.onrender.com/docs
 
-> 백엔드는 Render 무료 인스턴스로 배포되어 있습니다.
-> 일정 시간 요청이 없으면 서버가 일시 중지되며, 첫 요청 시 다시 시작되는 데 시간이 걸릴 수 있습니다. 앱의 첫 화면이 늦게 표시되거나 일시적인 오류가 발생하면 잠시 기다린 뒤 다시 시도해 주세요.
+> 백엔드는 Render 무료 인스턴스로 배포되어 있습니다. 앱 화면은 바로 실행되지만, 서버가 유휴 상태였다면 첫 회원가입·로그인 요청에 수십 초에서 약 1분이 걸릴 수 있습니다. 잠시 기다린 뒤 한 번 다시 시도하거나 Health Check 주소를 먼저 열어 주세요.
 
 ### 개발용 로컬 실행
 
@@ -368,24 +367,25 @@ AI-Builder-Sprint/
 
 별도의 로컬 재현이 필요한 경우 운영진 요청에 따라 테스트용 환경과 추가 안내를 제공하겠습니다.
 
-저장소 복제:
+저장소를 복제합니다.
 
 ```bash
 git clone https://github.com/nanman0620/AI-Builder-Sprint.git
 cd AI-Builder-Sprint
 ```
 
-백엔드·모바일·테스트 절의 첫 `cd` 명령은 현재 위치와 관계없이 저장소 루트를 기준으로 이동한다. 가상환경 활성화처럼 같은 절에서 이어지는 명령은 직전 단계의 디렉터리에서 실행한다.
+백엔드·모바일·테스트 절의 첫 `cd` 명령은 현재 위치와 관계없이 저장소 루트를 기준으로 이동합니다. 가상환경 활성화처럼 같은 절에서 이어지는 명령은 직전 단계의 디렉터리에서 실행합니다.
 
-로컬 실행 전 Python 3.13과 Node.js·npm이 설치되어 있어야 한다. macOS에 Python 3.13이 없으면 [Python 공식 macOS 다운로드](https://www.python.org/downloads/macos/)에서 먼저 설치한다. Android 실행에는 Android Studio emulator 또는 USB 디버깅이 연결된 Android 기기가 필요하다. macOS / Linux에서는 가상환경을 만들기 전에 다음 명령으로 필수 도구를 확인한다.
+로컬 실행 전 Python 3.13과 Node.js·npm이 설치되어 있어야 합니다. Python 3.13이 설치되어 있지 않다면 운영체제에 맞는 방법으로 먼저 설치해 주세요. Android 실행에는 Android Studio Emulator 또는 USB 디버깅이 연결된 Android 기기가 필요합니다. macOS / Linux / WSL에서는 가상환경을 만들기 전에 다음 명령으로 필수 도구를 확인합니다.
 
+> WSL에서 실행하는 경우 Node.js와 npm도 WSL 내부에 설치해야 합니다. `node -p "process.platform"`의 결과가 `linux`인지 확인해 주세요.
 ```bash
 python3.13 --version
 node --version
 npm --version
 ```
 
-백엔드 가상환경 생성 및 개발 의존성 설치:
+### 백엔드 가상환경 생성 및 개발 의존성 설치
 
 Windows PowerShell:
 
@@ -409,19 +409,29 @@ python -m pip install -e ".[dev]"
 test -f .env || cp .env.example .env
 ```
 
-`apps/server/.env`에 아래 서버 환경변수를 설정한 뒤 migration과 서버를 실행한다. Uvicorn은 실행 상태를 유지하므로 모바일은 별도 터미널에서 시작한다.
+`apps/server/.env`에 아래 서버 환경변수를 설정한 뒤 migration과 서버를 실행합니다. Uvicorn은 실행 상태를 유지하므로 모바일은 별도 터미널에서 시작합니다.
 
 ```bash
 python -m alembic upgrade head
 python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-서버가 실행되면 다음 주소를 확인할 수 있다.
+서버가 실행되면 다음 주소를 확인할 수 있습니다.
 
 - Health Check: http://127.0.0.1:8000/api/v1/health
 - API 문서: http://127.0.0.1:8000/docs
 
-모바일:
+#### 모바일
+
+Windows PowerShell:
+
+```powershell
+Set-Location (Join-Path (git rev-parse --show-toplevel) "apps/mobile")
+npm install
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+```
+
+macOS / Linux / WSL:
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/apps/mobile"
@@ -429,13 +439,13 @@ npm install
 test -f .env || cp .env.example .env
 ```
 
-`apps/mobile/.env`에 세 모바일 환경변수를 설정한다. `EXPO_PUBLIC_API_BASE_URL`은 반드시 `/api/v1`까지 포함해야 한다.
+`apps/mobile/.env`에 세 모바일 환경변수를 설정합니다. `EXPO_PUBLIC_API_BASE_URL`은 반드시 `/api/v1`까지 포함해야 합니다.
 
-- iOS simulator 또는 Web: `http://127.0.0.1:8000/api/v1`
+- Web: `http://127.0.0.1:8000/api/v1`
 - Android emulator: `http://10.0.2.2:8000/api/v1`
-- 실기기: `http://<Mac의-LAN-IP>:8000/api/v1`
+- 실제 Android 기기: `http://<개발 PC의 LAN-IP>:8000/api/v1`
 
-실기기는 Mac과 같은 네트워크에 연결하고, 백엔드는 위 명령처럼 `0.0.0.0`에서 수신해야 한다.
+실제 기기와 개발 PC는 같은 네트워크에 연결되어 있어야 하며, 백엔드는 위 명령처럼 `0.0.0.0`에서 요청을 수신해야 합니다.
 
 Expo 개발 서버:
 
@@ -449,7 +459,7 @@ Android 실행:
 npm run android
 ```
 
-`npx expo start -c`와 `npm run android`는 각각 개발 서버를 시작하는 명령이므로 필요한 실행 방식 하나를 선택한다.
+`npx expo start -c`와 `npm run android`는 각각 개발 서버를 시작하는 명령이므로 필요한 실행 방식 하나를 선택합니다.
 
 필요한 환경변수 이름과 설명은 다음 예시 파일에서 확인할 수 있습니다.
 
@@ -516,6 +526,15 @@ uvicorn app.main:app --host 0.0.0.0 --port $PORT
 
 ### 서버 자동 테스트
 
+Windows PowerShell:
+
+```powershell
+Set-Location (Join-Path (git rev-parse --show-toplevel) "apps/server")
+python -m pytest -q
+```
+
+macOS / Linux / WSL:
+
 ```bash
 cd "$(git rev-parse --show-toplevel)/apps/server"
 python -m pytest -q
@@ -530,6 +549,16 @@ python -m pytest -q
 - 회원탈퇴 삭제 순서와 연관 데이터 정리 검증
 
 ### 모바일 정적 검사
+
+Windows PowerShell:
+
+```powershell
+Set-Location (Join-Path (git rev-parse --show-toplevel) "apps/mobile")
+npx tsc --noEmit
+npm run lint
+```
+
+macOS / Linux / WSL:
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/apps/mobile"
@@ -640,4 +669,4 @@ AI의 제안을 그대로 반영하지 않고, 사람이 구현 범위와 위험
 - `SUPABASE_SERVICE_ROLE_KEY`는 서버 환경에서만 사용합니다.
 - `DATABASE_URL`, SOLAR/Gemini API Key는 서버 Secret으로 관리합니다.
 - 모바일에는 `EXPO_PUBLIC_*` 공개 설정만 포함합니다.
-- 테스트 계정과 검증용 스크립트, 실제 Secret은 저장소에 남기지 않았습니다.
+- 실제 Secret과 개인 테스트 계정 정보는 저장소에 포함하지 않았습니다.
