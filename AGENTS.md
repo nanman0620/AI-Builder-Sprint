@@ -54,7 +54,9 @@ AI-BUILDER-SPRINT/
 ├── README.md
 ├── apps/
 │   ├── mobile/
-│   │   └── assets/brand/
+│   │   └── assets/
+│   │       ├── brand/
+│   │       └── images/
 │   └── server/
 ├── scripts/
 ├── docs/
@@ -81,12 +83,13 @@ AI-BUILDER-SPRINT/
 - 저장소 공용 개발·검증 스크립트만 `scripts/`에 둔다.
 - API 원본은 `docs/api/`, DB 원본과 ERD는 `docs/database/`, 화면 원본·UI 참고는 `docs/design/`에 둔다.
 - 에이전트용 구현 요약과 AI 활용 기록은 `docs/ai/`에 둔다.
-- 앱에서 실제 사용하는 로고·마스코트만 `apps/mobile/assets/brand/`에 둔다.
+- 앱에서 실제 사용하는 로고·마스코트는 `apps/mobile/assets/brand/`에 둔다.
+- 하단 탭 runtime PNG 예외는 `docs/design/UI_REFERENCE.md`에 승인된 여덟 장만 `apps/mobile/assets/images/`에 둔다.
 - 앱 전용 스크립트는 해당 앱 내부에 둔다.
 - 새 최상위 디렉터리, 프레임워크, ORM, 상태관리 도구, 작업 큐를 임의로 도입하지 않는다.
 - 실제 저장소 구조가 예시와 다르면 먼저 기존 구조와 manifest를 확인한다.
 - 기존 구조를 무시하고 유사한 디렉터리나 중복 계층을 새로 만들지 않는다.
-- Expo 구조가 이미 있는 저장소에 이 agent-kit을 적용할 때는 `apps/mobile` 전체를 덮어쓰지 않는다. 기존 코드를 보존하고 문서와 `apps/mobile/assets/brand/` 자산만 필요한 위치에 병합한다.
+- Expo 구조가 이미 있는 저장소에 이 agent-kit을 적용할 때는 `apps/mobile` 전체를 덮어쓰지 않는다. 기존 코드를 보존하고 문서, `apps/mobile/assets/brand/` 자산과 승인된 하단 탭 runtime PNG만 필요한 위치에 병합한다.
 
 ## 4. GitHub 협업과 저장소 경계
 
@@ -268,8 +271,9 @@ remove: 작업 내용
 - 기존 구조와 문서 예시가 다르면 계약을 유지하는 범위에서 실제 구조를 따른다.
 - 같은 책임의 파일이나 추상화를 중복 생성하지 않는다.
 - 화면 캡처 하나마다 Route를 만들지 않고 서버 상태와 `screenMode` variant로 구현한다.
-- `docs/design/ui/screens/`와 `reference-only/` 이미지를 앱 화면·컴포넌트로 import하지 않는다.
-- 점수 게이지, 버튼, 카드, 입력창, 탭, 체크박스와 캘린더는 코드로 구현한다.
+- `docs/design/ui/screens/`와 `reference-only/` 경로의 이미지를 앱 화면·컴포넌트로 직접 import하지 않는다.
+- 하단 탭은 `UI_REFERENCE.md`에 승인된 여덟 장의 동일 복사본만 `apps/mobile/assets/images/`에서 runtime 사용한다.
+- 승인된 하단 탭 PNG 외의 점수 게이지, 버튼, 카드, 입력창, 탭, 체크박스와 캘린더는 코드로 구현한다.
 - CheckIn 결과의 마스코트는 `score`에 따라 `UI_REFERENCE.md`의 네 구간 자산을 선택한다. 30점은 표정 선택 전용, 60점은 결과 피드백 문구 선택 전용, 100점은 최고 단계 마스코트 선택 전용이며, 실제 재계획 여부는 `NOT_DONE` 존재 여부로 결정한다. 100점도 `score >= 60`의 기존 긍정적 피드백을 사용한다.
 
 ### 동결 계약 보호

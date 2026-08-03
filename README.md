@@ -266,12 +266,11 @@ AI 응답은 데이터베이스에 곧바로 저장되지 않습니다. FastAPI�
 
 ### 실제 검증 환경
 
-- Python: 현재 로컬 검증 `3.13.12`, Render `3.14.3`
-- 서버 요구 버전: Python `>= 3.13`
+- 서버 요구 버전: Python `>= 3.13` (`apps/server/pyproject.toml`)
 - Expo SDK: `54`
 - React Native: `0.81.5`
 - React: `19.1.0`
-- TypeScript: `5.9.2`
+- TypeScript: `package.json` 요구 범위 `~5.9.2`, `package-lock.json` 해석 버전 `5.9.3`
 - Android 애플리케이션 ID: `com.jennishin.ieum`
 
 ---
@@ -281,9 +280,20 @@ AI 응답은 데이터베이스에 곧바로 저장되지 않습니다. FastAPI�
 ```text
 AI-Builder-Sprint/
 ├─ apps/
-│  ├─ mobile/          # React Native·Expo 앱
-│  └─ server/          # FastAPI·Worker·DB migration
-├─ docs/ai/            # AI 활용 기록과 구현 컨텍스트
+│  ├─ mobile/
+│  │  ├─ app/          # Expo Router Route
+│  │  ├─ src/          # 기능·컴포넌트·API client
+│  │  └─ assets/       # 앱 runtime 이미지·폰트
+│  └─ server/
+│     ├─ app/          # FastAPI·service·Worker
+│     ├─ alembic/      # DB migration
+│     └─ tests/        # 서버 테스트
+├─ docs/
+│  ├─ api/             # 최종 API 명세
+│  ├─ database/        # 최종 DB 명세와 ERD
+│  ├─ design/          # 화면 흐름·UI 구현 기준
+│  └─ ai/              # AI 활용 기록과 구현 컨텍스트
+├─ .github/            # Issue·PR 템플릿
 ├─ AGENTS.md           # Codex 작업 지침
 ├─ CLAUDE.md           # Claude Code 작업 지침
 └─ README.md
@@ -365,40 +375,67 @@ git clone https://github.com/nanman0620/AI-Builder-Sprint.git
 cd AI-Builder-Sprint
 ```
 
-백엔드:
+백엔드·모바일·테스트 절의 첫 `cd` 명령은 현재 위치와 관계없이 저장소 루트를 기준으로 이동한다. 가상환경 활성화처럼 같은 절에서 이어지는 명령은 직전 단계의 디렉터리에서 실행한다.
+
+로컬 실행 전 Python 3.13과 Node.js·npm이 설치되어 있어야 한다. macOS에 Python 3.13이 없으면 [Python 공식 macOS 다운로드](https://www.python.org/downloads/macos/)에서 먼저 설치한다. Android 실행에는 Android Studio emulator 또는 USB 디버깅이 연결된 Android 기기가 필요하다. macOS / Linux에서는 가상환경을 만들기 전에 다음 명령으로 필수 도구를 확인한다.
 
 ```bash
-cd apps/server
-python -m venv .venv
+python3.13 --version
+node --version
+npm --version
 ```
+
+백엔드 가상환경 생성 및 개발 의존성 설치:
 
 Windows PowerShell:
 
 ```powershell
+Set-Location (Join-Path (git rev-parse --show-toplevel) "apps/server")
+py -3.13 -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
 macOS / Linux:
 
 ```bash
+cd "$(git rev-parse --show-toplevel)/apps/server"
+python3.13 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+test -f .env || cp .env.example .env
 ```
 
-가상환경 활성화 후:
+`apps/server/.env`에 아래 서버 환경변수를 설정한 뒤 migration과 서버를 실행한다. Uvicorn은 실행 상태를 유지하므로 모바일은 별도 터미널에서 시작한다.
 
 ```bash
-python -m pip install --upgrade pip
-python -m pip install .
 python -m alembic upgrade head
 python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+서버가 실행되면 다음 주소를 확인할 수 있다.
+
+- Health Check: http://127.0.0.1:8000/api/v1/health
+- API 문서: http://127.0.0.1:8000/docs
+
 모바일:
 
 ```bash
-cd apps/mobile
+cd "$(git rev-parse --show-toplevel)/apps/mobile"
 npm install
+test -f .env || cp .env.example .env
 ```
+
+`apps/mobile/.env`에 세 모바일 환경변수를 설정한다. `EXPO_PUBLIC_API_BASE_URL`은 반드시 `/api/v1`까지 포함해야 한다.
+
+- iOS simulator 또는 Web: `http://127.0.0.1:8000/api/v1`
+- Android emulator: `http://10.0.2.2:8000/api/v1`
+- 실기기: `http://<Mac의-LAN-IP>:8000/api/v1`
+
+실기기는 Mac과 같은 네트워크에 연결하고, 백엔드는 위 명령처럼 `0.0.0.0`에서 수신해야 한다.
 
 Expo 개발 서버:
 
@@ -411,6 +448,8 @@ Android 실행:
 ```bash
 npm run android
 ```
+
+`npx expo start -c`와 `npm run android`는 각각 개발 서버를 시작하는 명령이므로 필요한 실행 방식 하나를 선택한다.
 
 필요한 환경변수 이름과 설명은 다음 예시 파일에서 확인할 수 있습니다.
 
@@ -431,7 +470,7 @@ npm run android
 ### 개발용 웹 프리뷰
 
 ```bash
-cd apps/mobile
+cd "$(git rev-parse --show-toplevel)/apps/mobile"
 npm run web
 ```
 
@@ -475,10 +514,10 @@ uvicorn app.main:app --host 0.0.0.0 --port $PORT
 
 ## 11. 테스트 및 검증 결과
 
-### 자동 테스트
+### 서버 자동 테스트
 
 ```bash
-cd apps/server
+cd "$(git rev-parse --show-toplevel)/apps/server"
 python -m pytest -q
 ```
 
@@ -490,8 +529,10 @@ python -m pytest -q
 - 분기 자동 정산과 홈·캘린더 조회 기준 검증
 - 회원탈퇴 삭제 순서와 연관 데이터 정리 검증
 
+### 모바일 정적 검사
+
 ```bash
-cd apps/mobile
+cd "$(git rev-parse --show-toplevel)/apps/mobile"
 npx tsc --noEmit
 npm run lint
 ```
@@ -499,9 +540,8 @@ npm run lint
 - TypeScript 검사 통과
 - ESLint 통과
 - 개발 과정에서 Expo Web 정적 export 확인
-- 홈·캘린더·계획관리·앱 상태 복원 로직 검증
 
-> 일부 순수 로직은 기능별 Node 테스트 하네스로 검증했습니다. React Native 의존 파일은 Node 환경에서 직접 실행하기 어려워 TypeScript 검사, ESLint, 정적 export와 Android 실기기 검증으로 보완했습니다.
+> 모바일 `package.json`에는 공용 `test` script가 없습니다. 저장소의 기능별 테스트 파일은 개발 과정의 일회성 Node 하네스로 검증했으며, 현재 새 환경에서 재현 가능한 공통 검증 명령은 위 TypeScript 검사와 ESLint입니다. React Native 의존 동작은 Expo Web 정적 export와 Android 실기기 검증으로 보완했습니다.
 
 ### 실제 환경 통합 검증
 
