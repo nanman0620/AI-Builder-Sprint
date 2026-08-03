@@ -83,9 +83,10 @@ git switch -c feature/작업명-이니셜
 - 화면 존재·상태·문구·이동·API 동작은 화면 흐름 PDF, 시각 배치는 캡처를 따른다.
 - `UI_REFERENCE.md`의 보정 표에 기록된 차이는 추가 질문 없이 보정 규칙대로 구현한다.
 - 캡처 하나마다 Route를 만들지 않는다. 홈과 계획관리는 서버 상태에 따른 단일 화면 variant로 구현한다.
-- `docs/design/ui/screens/`와 `reference-only/` 파일은 앱에서 import하지 않는다.
-- 로고·마스코트만 `apps/mobile/assets/brand/`에서 import한다.
-- 버튼·카드·입력·탭·체크박스·점수 게이지·캘린더는 React Native 코드로 만든다.
+- `docs/design/ui/screens/`와 `reference-only/` 경로의 파일은 앱에서 직접 import하지 않는다.
+- 로고·마스코트와 승인된 예외 자산은 `apps/mobile/assets/brand/`에서 import한다.
+- 하단 탭은 `UI_REFERENCE.md`에 승인된 여덟 장의 동일 복사본만 `apps/mobile/assets/images/`에서 runtime 사용한다.
+- 승인된 하단 탭 PNG 외의 버튼·카드·입력·탭·체크박스·점수 게이지·캘린더는 React Native 코드로 만든다.
 - `CHECK_IN_RESULT`의 마스코트는 `UI_REFERENCE.md`에 정한 `0~29`, `30~59`, `60~99`, `100` 점수 구간으로 선택한다.
 - 30점은 표정 자산 선택 전용, 60점은 결과 피드백 문구 선택 전용, 100점은 최고 단계 마스코트 선택 전용이다. 실제 재계획 여부는 `NOT_DONE` 존재 여부로 결정하며, 100점도 `score >= 60`의 기존 긍정적 피드백을 사용한다.
 - 캡처의 예시 데이터와 `9:41` 상태바를 하드코딩하지 않는다.

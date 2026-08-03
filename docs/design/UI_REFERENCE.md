@@ -25,7 +25,8 @@
 | `UI-028`, `UI-029` | 이메일이 일반 입력창처럼 보임 | 이메일은 `auth.users.email` 읽기 전용. 이메일 변경 API를 만들지 않음 |
 | `UI-032` | “연결에 실패했어요” 문구 | 레이아웃만 참고. 일반 최초 조회 오류는 “정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.” |
 | 점수 25·75 조각 | 고정된 원형 게이지 이미지 | 점수는 0~100 동적 값이므로 코드로 그림. PNG import 금지 |
-| 하단 탭·버튼·입력 조각 | 완성된 UI 이미지 | 코드 컴포넌트와 상태 variant로 구현. `reference-only/` import 금지 |
+| 하단 탭 조각 | 선택·기본 상태 PNG | `reference-only/`를 직접 import하지 않고, 아래 승인된 여덟 장의 동일 복사본을 `apps/mobile/assets/images/`에서 runtime 사용 |
+| 버튼·입력 조각 | 완성된 UI 이미지 | 코드 컴포넌트와 상태 variant로 구현. PNG import 금지 |
 
 추가 규칙:
 
@@ -119,6 +120,21 @@
 | `../../apps/mobile/assets/brand/mascot-score-100.png` | CheckIn `score` 100 |
 
 상대 경로는 이 문서 위치 기준 설명이다. 실제 TypeScript import는 `apps/mobile`의 alias와 기존 구조를 확인해 작성한다.
+
+### 승인된 하단 탭 runtime 자산
+
+다음 여덟 장은 `ui/reference-only/` 조각과 동일한 파일을 `apps/mobile/assets/images/`로 복사해 사용하는 하단 탭 전용 예외다. 문서 경로의 원본을 직접 import하거나 다른 `reference-only/` 조각을 runtime 자산으로 복사하지 않는다.
+
+| runtime 파일 | 상태 |
+| --- | --- |
+| `../../apps/mobile/assets/images/REF-005-tab-plan-selected.png` | 계획관리 선택 |
+| `../../apps/mobile/assets/images/REF-006-tab-plan-default.png` | 계획관리 기본 |
+| `../../apps/mobile/assets/images/REF-011-tab-settings-selected.png` | 설정 선택 |
+| `../../apps/mobile/assets/images/REF-012-tab-settings-default.png` | 설정 기본 |
+| `../../apps/mobile/assets/images/REF-018-tab-calendar-default.png` | 캘린더 기본 |
+| `../../apps/mobile/assets/images/REF-019-tab-calendar-selected.png` | 캘린더 선택 |
+| `../../apps/mobile/assets/images/REF-023-tab-home-default.png` | 홈 기본 |
+| `../../apps/mobile/assets/images/REF-024-tab-home-selected.png` | 홈 선택 |
 
 ### 점수별 마스코트 선택 규칙
 
